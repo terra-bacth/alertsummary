@@ -1,0 +1,12 @@
+apiVersion: v2
+name: tsagent
+description: Multi-agent RHOSP alarm troubleshooting system (AlertManager -> correlation -> PromQL -> node SSH -> RCA report)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - openstack
+  - rhosp
+  - alertmanager
+  - sre
+  - agents

@@ -1,0 +1,35 @@
+# Operator knowledge injected into the planner prompt when a matching alarm fires.
+# Keep each entry to a few lines: it is prepended to every planning call, and on CPU inference
+# every token is latency. Add an entry whenever the agent gets an alarm type wrong twice.
+
+alarms:
+  NodeDown: |
+    The node exporter stopped responding. Distinguish "node is gone" from "exporter died":
+    check up{job="node-exporter"} for the instance, and whether other exporters on the same
+    node still report. If every job on the node is down, treat it as a host/network failure.
+    Useful metrics: up, node_boot_time_seconds (a jump means it rebooted).
+
+  NodeFilesystemAlmostOutOfSpace: |
+    Check node_filesystem_avail_bytes and node_filesystem_size_bytes per mountpoint, and the
+    fill rate over the last few hours (predict_linear over node_filesystem_avail_bytes).
+    On RHOSP the usual culprits are /var/log/containers and journal growth.
+
+  HighLoad: |
+    Compare node_load5 against machine CPU count (count of node_cpu_seconds_total by cpu).
+    Load high with low CPU utilisation points at IO wait — check node_disk_io_time_seconds_total.
+
+  ServiceDown: |
+    OSP16+ services run as podman containers managed by systemd units named tripleo_*.
+    Check up for the service's exporter, then the tripleo_ unit and container state on the node.
+
+  InstanceHighCpu: |
+    Check node_cpu_seconds_total rate by mode. Steal time indicates contention on the
+    hypervisor rather than a problem inside the guest.
+
+  NetworkFlapping: |
+    Check node_network_up and the rate of node_network_carrier_changes_total on the
+    interface, plus errors/drops via node_network_receive_errs_total.
+
+  PacemakerResourceFailed: |
+    Controllers only. Correlate with pcs status on the node and the failed resource's
+    tripleo_ unit. A single failed resource with a healthy cluster is usually recoverable.

@@ -1,0 +1,34 @@
+# Service Telemetry Framework (STF) alarms.
+#
+# STF collects via collectd through sg-core, so metrics are named collectd_* — node_exporter
+# names like node_filesystem_avail_bytes do not exist here and return empty, which is
+# indistinguishable from "healthy" unless the agent is told. The host is carried in the `host`
+# label (an FQDN), not `instance`.
+
+alarms:
+  hugepages: |
+    collectd hugepage metric: collectd_hugepages_vmpage_number, split by type_instance
+    ("free" vs the rest) and plugin_instance (e.g. node0-1048576Kb, mm-1048576Kb).
+    Free ratio is: sum without (type_instance) (collectd_hugepages_vmpage_number{type_instance="free"})
+    / sum without (type_instance) (collectd_hugepages_vmpage_number)
+    Check the ratio per host and plugin_instance, and whether it is trending down or flat.
+    A flat low ratio is normal on a fully-allocated compute node; a falling one means
+    instances are still claiming pages. Correlate with collectd_virt_* for guest count.
+
+  High Hugepage Usage: |
+    Same metric family as `hugepages`, at a tighter threshold (<5% free).
+    On a NUMA-imbalanced host one node can exhaust while another has room — always break the
+    query down by plugin_instance, not just by host, or the imbalance is invisible.
+    Relevant follow-up on the node: `cat /proc/meminfo` equivalents are not allow-listed, so
+    rely on `free -m` and the virt metrics for guest placement.
+
+# Appended to every planning prompt on this stack. Kept deliberately short — it costs tokens on
+# each call, and the PromQL agent is separately told the namespace derived from the firing rule.
+global: |
+  Metrics here come from collectd via sg-core, not node_exporter:
+    collectd_cpu_total, collectd_load_* — CPU and load
+    collectd_memory_memory, collectd_vmem_* — memory
+    collectd_df_df_complex — filesystem space (type_instance: free|used|reserved)
+    collectd_interface_if_{octets,errors,dropped} — network
+    collectd_virt_* — guest-level metrics on compute nodes
+  The host is in the `host` label (an FQDN), not `instance`.

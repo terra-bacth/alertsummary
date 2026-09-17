@@ -1,0 +1,137 @@
+image:
+  repository: image-registry.openshift-image-registry.svc:5000/tsagent/tsagent
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+# One replica only. The case store and LangGraph checkpointer are SQLite on a RWO volume, so a
+# second replica would either fail to mount or corrupt state. Scaling out needs the queue +
+# PostgreSQL step from the plan's phase 7, not a bigger replica count.
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  size: 5Gi
+  storageClass: ""
+  accessMode: ReadWriteOnce
+
+service:
+  port: 8080
+
+route:
+  enabled: true
+  host: ""
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+serviceMonitor:
+  enabled: true
+  interval: 30s
+
+# --- application config -----------------------------------------------------
+# Rendered into ConfigMaps. Override per environment with a values file.
+
+settings:
+  correlation:
+    window_seconds: 300
+    max_group_age_seconds: 900
+    sweep_interval_seconds: 15
+  reflection:
+    enabled: true
+    max_retries: 2
+  investigation:
+    max_promql_queries: 6
+    max_node_commands: 8
+    node_access_threshold: 0.7
+  report:
+    notify_webhook: ""
+
+llm:
+  default_profile: llama-lab
+  defaults:
+    timeout_seconds: 300
+    max_tokens: 1024
+    temperature: 0.1
+    max_attempts: 3
+    retry_backoff_seconds: 2
+  profiles:
+    llama-lab:
+      model: hosted_vllm/meta-llama/Llama-3.2-8B-Instruct
+      api_base: http://vllm-llama.llm-serving.svc:8000/v1
+      api_key_env: TSAGENT_VLLM_API_KEY
+      structured_output: prompt
+    qwen-lab:
+      model: hosted_vllm/Qwen/Qwen2.5-7B-Instruct
+      api_base: http://vllm-qwen.llm-serving.svc:8000/v1
+      api_key_env: TSAGENT_VLLM_API_KEY
+      structured_output: prompt
+  per_agent_overrides:
+    planner: qwen-lab
+    promql: qwen-lab
+    reflection: llama-lab
+  fallback_chain: []
+
+clusters:
+  prometheus_instances:
+    prom-lab:
+      url: http://prometheus.lab.example:9090
+      timeout_seconds: 30
+  clusters:
+    lab-cluster-1:
+      prometheus: prom-lab
+      director:
+        host: director.lab.example
+        user: troubleshoot
+        auth: key
+        key_path: /etc/tsagent/ssh/id_ed25519
+      labels:
+        site: lab
+
+# Mounted from a Secret. Create it out of band and set existingSecret, or let the chart create
+# one from these values (avoid putting real keys in a values file you commit).
+secrets:
+  existingSecret: ""
+  sshPrivateKey: ""
+  apiKeys: {}
+  # e.g.
+  #   ANTHROPIC_API_KEY: ""
+  #   GEMINI_API_KEY: ""
+
+networkPolicy:
+  # Egress is denied by default and opened only to what the agent genuinely needs: the
+  # per-cluster Prometheus, the director's SSH port, the LLM endpoint, and cluster DNS.
+  enabled: true
+  allowedEgress:
+    - description: Prometheus
+      ports: [9090]
+    - description: director SSH
+      ports: [22]
+    - description: vLLM / Ollama
+      ports: [8000, 11434]
+  allowDNS: true
+  # AlertManager posts to us; restrict which namespace may do so.
+  ingressFromNamespace: openshift-monitoring
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+extraEnv: []

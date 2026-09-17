@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-config
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+data:
+  settings.yaml: |
+{{ toYaml .Values.settings | indent 4 }}
+  llm.yaml: |
+{{ toYaml .Values.llm | indent 4 }}
+  clusters.yaml: |
+{{ toYaml .Values.clusters | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-allowlist
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+data:
+  # Kept in its own ConfigMap: this is the security boundary for node access, and it should be
+  # reviewable and changeable independently of routine tuning.
+  ssh_allowlist.yaml: |
+{{ .Files.Get "files/ssh_allowlist.yaml" | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-runbooks
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+data:
+{{- range $path, $_ := .Files.Glob "files/runbooks/*.yaml" }}
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-knowledge
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+data:
+  # Known-good PromQL shown to the agent as worked examples.
+  promql_library.yaml: |
+{{ .Files.Get "files/promql_library.yaml" | indent 4 }}
+{{- range $path, $_ := .Files.Glob "files/metrics/*.txt" }}
+  # Metric catalogue: a generated query naming anything outside this list is not executed.
+  {{ base $path }}: |
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}

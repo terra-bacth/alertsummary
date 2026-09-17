@@ -1,0 +1,51 @@
+# Public providers (Gemini / OpenAI / Anthropic).
+#
+#   oc create secret generic tsagent-llm-keys --from-literal=ANTHROPIC_API_KEY=...
+#   helm upgrade --install tsagent deploy/helm/tsagent \
+#     -f deploy/helm/tsagent/values-public-llm.yaml \
+#     --set secrets.existingSecret=tsagent-llm-keys
+#
+# NOTE: incident context sent to these providers includes node names, alarm text and log
+# excerpts from production infrastructure. Confirm that is acceptable to your organisation
+# before deploying with this preset.
+llm:
+  default_profile: anthropic
+  defaults:
+    timeout_seconds: 120
+    max_tokens: 2048
+    temperature: 0.1
+    max_attempts: 3
+    retry_backoff_seconds: 2
+  profiles:
+    anthropic:
+      model: claude-sonnet-5
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
+    gemini:
+      model: gemini/gemini-2.5-pro
+      api_key_env: GEMINI_API_KEY
+  per_agent_overrides: {}
+  fallback_chain: [openai]
+
+secrets:
+  existingSecret: ""
+  apiKeys:
+    ANTHROPIC_API_KEY: ""
+    OPENAI_API_KEY: ""
+    GEMINI_API_KEY: ""
+
+settings:
+  investigation:
+    max_promql_queries: 8
+    max_node_commands: 8
+
+networkPolicy:
+  allowedEgress:
+    - description: Prometheus
+      ports: [9090]
+    - description: director SSH
+      ports: [22]
+    - description: provider HTTPS
+      ports: [443]

@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tsagent.fullname" . }}
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # SQLite on a RWO volume cannot be held by two pods at once, so the old pod must release the
+    # mount before the new one starts.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tsagent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tsagent.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Restart the pod when config changes, otherwise a ConfigMap edit is silently ignored
+        # until something else triggers a rollout.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: tsagent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: TSAGENT_CONFIG_DIR
+              value: /etc/tsagent/config
+            - name: TSAGENT_DB_PATH
+              value: /opt/app-root/data/cases.db
+            - name: TSAGENT_CHECKPOINT_PATH
+              value: /opt/app-root/data/checkpoints.db
+            {{- range $key, $_ := .Values.secrets.apiKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tsagent.secretName" $ }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tsagent/config
+              readOnly: true
+            - name: allowlist
+              mountPath: /etc/tsagent/config/ssh_allowlist.yaml
+              subPath: ssh_allowlist.yaml
+              readOnly: true
+            - name: runbooks
+              mountPath: /etc/tsagent/config/runbooks
+              readOnly: true
+            - name: knowledge
+              mountPath: /etc/tsagent/config/promql_library.yaml
+              subPath: promql_library.yaml
+              readOnly: true
+            - name: knowledge
+              mountPath: /etc/tsagent/config/metrics
+              readOnly: true
+            - name: ssh-key
+              mountPath: /etc/tsagent/ssh
+              readOnly: true
+            - name: data
+              mountPath: /opt/app-root/data
+            # readOnlyRootFilesystem is on, so anything that writes needs an explicit volume.
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "tsagent.fullname" . }}-config
+        - name: allowlist
+          configMap:
+            name: {{ include "tsagent.fullname" . }}-allowlist
+        - name: runbooks
+          configMap:
+            name: {{ include "tsagent.fullname" . }}-runbooks
+        - name: ssh-key
+          secret:
+            secretName: {{ include "tsagent.secretName" . }}
+            optional: true
+            items:
+              - key: sshPrivateKey
+                path: id_ed25519
+                mode: 0400
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tsagent.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

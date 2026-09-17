@@ -1,0 +1,35 @@
+# Ollama in-cluster. Handy for a laptop-scale demo or when vLLM is not yet provisioned.
+#
+#   helm upgrade --install tsagent deploy/helm/tsagent -f deploy/helm/tsagent/values-ollama.yaml
+llm:
+  default_profile: ollama
+  defaults:
+    timeout_seconds: 300
+    max_tokens: 1024
+    temperature: 0.1
+    max_attempts: 3
+    retry_backoff_seconds: 2
+  profiles:
+    ollama:
+      model: ollama/llama3.2:3b
+      api_base: http://ollama.llm-serving.svc:11434
+      structured_output: prompt
+  per_agent_overrides: {}
+  fallback_chain: []
+
+settings:
+  reflection:
+    # A 3B model reflecting on its own work adds latency without adding much judgement.
+    enabled: false
+  investigation:
+    max_promql_queries: 4
+    max_node_commands: 4
+
+networkPolicy:
+  allowedEgress:
+    - description: Prometheus
+      ports: [9090]
+    - description: director SSH
+      ports: [22]
+    - description: Ollama
+      ports: [11434]

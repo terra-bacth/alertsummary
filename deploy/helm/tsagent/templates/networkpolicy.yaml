@@ -1,0 +1,49 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny with explicit holes. The agent holds SSH credentials to every director in the
+# estate, so its egress surface is worth constraining tightly.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tsagent.fullname" . }}
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "tsagent.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # AlertManager posting to /alerts, plus operators reading reports through the Route.
+    - from:
+        {{- if .Values.networkPolicy.ingressFromNamespace }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressFromNamespace }}
+        {{- end }}
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    {{- if .Values.networkPolicy.allowDNS }}
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    {{- end }}
+    {{- range .Values.networkPolicy.allowedEgress }}
+    # {{ .description }}
+    - ports:
+        {{- range .ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}

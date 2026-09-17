@@ -1,0 +1,45 @@
+# Cluster inventory: maps each RHOSP cluster to its Prometheus and director node.
+# Lab POC: one cluster, one Prometheus. Prod: several clusters may share one Prometheus.
+prometheus_instances:
+  prom-lab:
+    url: "https://example-prometheus-proxy-service-telemetry.apps.hub01.caas.com"
+    timeout_seconds: 30
+    # For STF on OpenShift, Prometheus is HTTPS with a service-serving certificate signed by the
+    # cluster CA, and requires a bearer token. In-pod, both are on the service account:
+    #   url: "https://prometheus-example.service-telemetry.svc:9090"
+    #   ca_bundle: "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+    #   bearer_token_file: "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    # Running outside the cluster, export the CA and use a token from `oc whoami -t`:
+    #   ca_bundle: "/etc/tsagent/tls/service-ca.crt"
+    bearer_token_env: "TSAGENT_PROM_TOKEN"
+    verify_ssl: false #disables verification entirely — throwaway labs only.
+
+clusters:
+  lab-cluster-1:
+    prometheus: prom-lab
+    director:
+      host: "ospdirector.rhosp2.caas.com"
+      user: "npadmin"
+      # Detected from /etc/rhosp-release on the director when left empty. The version decides the
+      # inventory command (metalsmith on 17, nova on 16), the overcloud SSH account, and the
+      # command guidance given to the node agent. Set to "16" or "17" to skip detection.
+      osp_version: ""
+      # Empty derives from the version: heat-admin on 16, tripleo-admin on 16.2+/17.
+      overcloud_user: ""
+      # Domain that alarm host labels carry, stripped before matching against inventory
+      # hostnames. e.g. an alarm host of ctrl03.rhosp2.jiocaas.com with this set matches an
+      # inventory entry of ctrl03.
+      domain: ""
+      auth: "password"                 # key | password
+      key_path: "/etc/tsagent/ssh/id_ed25519"
+      password_env: "TSAGENT_DIRECTOR_PASSWORD"   # if auth: password
+    # Used to match an incoming alarm to this cluster. With a single cluster defined, anything
+    # unmatched falls through to it anyway, so these can be left empty for a lab.
+    labels:
+      site: "lab"
+    # Injected into every PromQL query to scope a Prometheus shared between clusters.
+    # IMPORTANT: these are metric labels, not alarm labels — check with
+    #   curl -s <prom>/api/v1/label/__name__/values
+    # that the label actually exists on your metrics. One Prometheus per cluster needs no
+    # scoping at all, so leave it empty:
+    promql_matchers: {}

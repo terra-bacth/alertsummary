@@ -1,0 +1,145 @@
+# Known-good PromQL for this platform.
+#
+# The PromQL agent is shown the entries most relevant to each plan goal as worked examples, so it
+# adapts queries an operator already trusts instead of inventing metric names. Add an entry
+# whenever you find yourself writing the same query twice, or whenever the agent gets one wrong.
+#
+#   <name>:                      what it measures — this is what goals are matched against
+#     metric_names: [...]        search keywords (token dump is fine; not used for validation)
+#     promql: "..."              the query itself
+#
+# Real metric names are derived from the promql, so `metric_names` may contain noise like
+# `by`, `host`, `on` without causing problems.
+
+version: 1
+queries:
+  cpu_utilization%:
+    metric_names: [by, collectd_cpu_percent, host, idle, plugin_instance, type_instance]
+    promql: sum by (host) (collectd_cpu_percent{type_instance!="idle"}) / count by (host)
+      (sum by (host,plugin_instance) (collectd_cpu_percent))
+  cpu_utilization_by_system%:
+    metric_names: [by, collectd_cpu_percent, host, system, type_instance]
+    promql: sum(collectd_cpu_percent{type_instance="system"}) by (host) /
+      count(collectd_cpu_percent{type_instance="system"}) by (host)
+  cpu_utilization_by_user%:
+    metric_names: [by, collectd_cpu_percent, host, type_instance, user]
+    promql: sum(collectd_cpu_percent{type_instance="user"}) by (host) /
+      count(collectd_cpu_percent{type_instance="user"}) by (host)
+  cpu_utilization_by_wait%:
+    metric_names: [by, collectd_cpu_percent, host, type_instance, wait]
+    promql: sum(collectd_cpu_percent{type_instance="wait"}) by (host) /
+      count(collectd_cpu_percent{type_instance="wait"}) by (host)
+  cpu_utilization_by_steal%:
+    metric_names: [by, collectd_cpu_percent, host, steal, type_instance]
+    promql: sum(collectd_cpu_percent{type_instance="steal"}) by (host) /
+      count(collectd_cpu_percent{type_instance="steal"}) by (host)
+  cpu_utilization_by_softirq%:
+    metric_names: [by, collectd_cpu_percent, host, softirq, type_instance]
+    promql: sum(collectd_cpu_percent{type_instance="softirq"}) by (host) /
+      count(collectd_cpu_percent{type_instance="softirq"}) by (host)
+  cpu_utilization_by_interrupt%:
+    metric_names: [by, collectd_cpu_percent, host, interrupt, type_instance]
+    promql: sum(collectd_cpu_percent{type_instance="interrupt"}) by (host) /
+      count(collectd_cpu_percent{type_instance="interrupt"}) by (host)
+  cpu_utilization_by_nice%:
+    metric_names: [by, collectd_cpu_percent, host, nice, type_instance]
+    promql: sum(collectd_cpu_percent{type_instance="nice"}) by (host) /
+      count(collectd_cpu_percent{type_instance="nice"}) by (host)
+
+  mem_utilization%:
+    metric_names: [by, collectd_memory, host, type_instance, used]
+    promql: 100 * sum by (host) (collectd_memory{type_instance="used"}) / sum by (host)
+      (collectd_memory)
+  hugepage_utilisation%:
+    metric_names: [by, collectd_hugepages_vmpage_number, host, type_instance, used, hugepages]
+    promql: 100 * sum by (host) (collectd_hugepages_vmpage_number{type_instance="used"}) /
+      sum by (host) (collectd_hugepages_vmpage_number)
+  disk_utilization%:
+    metric_names: [by, collectd_df_df_complex, host, type_instance, used, space, free, full, filesystem, storage]
+    promql: 100 * sum by (host) (collectd_df_df_complex{type_instance="used"}) / sum by (host)
+      (collectd_df_df_complex)
+  uptime:
+    metric_names: [collectd_uptime]
+    promql: collectd_uptime
+
+  load_shortterm:
+    metric_names: [collectd_load_shortterm]
+    promql: collectd_load_shortterm
+  load_midterm:
+    metric_names: [collectd_load_midterm]
+    promql: collectd_load_midterm
+  load_longterm:
+    metric_names: [collectd_load_longterm]
+    promql: collectd_load_longterm
+
+  disk_read_throughput:
+    metric_names: [by, collectd_disk_disk_octets_read_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_octets_read_total[5m]))
+  disk_write_throughput:
+    metric_names: [by, collectd_disk_disk_octets_write_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_octets_write_total[5m]))
+  average_number_of_disk_read_operations:
+    metric_names: [by, collectd_disk_disk_ops_read_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_ops_read_total[5m]))
+  average_number_of_disk_write_operations:
+    metric_names: [by, collectd_disk_disk_ops_write_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_ops_write_total[5m]))
+  load_disk_io_time:
+    metric_names: [by, collectd_disk_disk_io_time_io_time_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_io_time_io_time_total[5m])) / 1000
+  load_weighted_io_time:
+    metric_names: [by, collectd_disk_disk_io_time_weighted_io_time_total, host]
+    promql: sum by (host) (rate(collectd_disk_disk_io_time_weighted_io_time_total[5m])) / 1000
+
+  interface_errors:
+    metric_names: [by, collectd_interface_if_errors_rx_total, collectd_interface_if_errors_tx_total, host]
+    promql: sum by (host) (collectd_interface_if_errors_rx_total) + sum by (host)
+      (collectd_interface_if_errors_tx_total)
+  network_rx_mbps:
+    metric_names: [collectd_interface_if_octets_rx_total, plugin_instance, network, interface]
+    promql: rate(collectd_interface_if_octets_rx_total[5m]) / 1000000
+  network_tx_mbps:
+    metric_names: [collectd_interface_if_octets_tx_total, plugin_instance, network, interface]
+    promql: rate(collectd_interface_if_octets_tx_total[5m]) / 1000000
+
+  # Container health via sensubility. `process` selects the service; a regex covers bundles.
+  container_health:
+    metric_names: [sensubility_container_health_status, process, health, container, service]
+    promql: min_over_time(sensubility_container_health_status[5m])
+  health_nova_compute:
+    metric_names: [nova_compute, process, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process="nova_compute"}[5m])
+  health_nova_api:
+    metric_names: [nova_api, process, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process="nova_api"}[5m])
+  health_neutron_ovs_agent:
+    metric_names: [neutron_ovs_agent, process, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process="neutron_ovs_agent"}[5m])
+  health_galera_bundle:
+    metric_names: [bundle, galera, podman, process, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process=~"galera-bundle-podman-[012]"}[5m])
+  health_rabbitmq_bundle:
+    metric_names: [bundle, podman, process, rabbitmq, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process=~"rabbitmq-bundle-podman-[012]"}[5m])
+  health_haproxy_bundle:
+    metric_names: [bundle, haproxy, podman, process, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process="haproxy-bundle-podman-0"}[5m])
+  health_redis_bundle:
+    metric_names: [bundle, podman, process, redis, sensubility_container_health_status]
+    promql: min_over_time(sensubility_container_health_status{process=~"redis-bundle-podman-[012]"}[5m])
+
+  vm_cpu_utilization%:
+    metric_names: [ceilometer_cpu, collectd_virt_percent, group_left, host, node, project, resource, guest, instance]
+    promql: label_replace(label_replace(collectd_virt_percent, "resource", "$1", "host",
+      ".+:(.+):.+"), "node", "$1", "host", ".+:.+:(.+)") + on (resource) group_left(project)
+      (avg by (resource,project) (ceilometer_cpu{}) * 0)
+  vm_mem_utilization%:
+    metric_names: [ceilometer_memory_usage, collectd_virt_memory, group_left, host, node, project, resource, guest]
+    promql: (label_replace(label_replace(collectd_virt_memory, "resource", "$1", "host",
+      ".+:(.+):.+"), "node", "$1", "host", ".+:.+:(.+)") / 1000000) / on (resource)
+      group_left(project) ceilometer_memory_usage{}
+  vm_domain_state:
+    metric_names: [ceilometer_cpu, collectd_virt_domain_state_state, group_left, host, node, project, resource, guest]
+    promql: label_replace(label_replace(last_over_time(collectd_virt_domain_state_state[5m]),
+      "resource", "$1", "host", ".+:(.+):.+"), "node", "$1", "host", ".+:.+:(.+)")
+      + on (resource) group_left(project) (ceilometer_cpu{} * 0)

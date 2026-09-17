@@ -1,0 +1,52 @@
+tsagent {{ .Chart.AppVersion }} is installed as {{ include "tsagent.fullname" . }}.
+
+1. Check it came up:
+
+     oc rollout status deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }}
+     oc logs -f deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }}
+
+2. Point AlertManager at it. Inside the cluster the webhook URL is:
+
+     http://{{ include "tsagent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/alerts
+
+   Add to the AlertManager config:
+
+     receivers:
+       - name: tsagent
+         webhook_configs:
+           - url: http://{{ include "tsagent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/alerts
+             send_resolved: true
+
+{{- if .Values.route.enabled }}
+
+3. Reports are readable through the Route:
+
+     oc get route {{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}{"\n"}'
+     curl https://$HOST/incidents
+     curl https://$HOST/incidents/<id>/report?format=md
+{{- end }}
+
+4. Fire a synthetic alarm to prove the path end to end:
+
+     oc exec deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -- \
+       curl -sS -XPOST localhost:8080/alerts -H 'Content-Type: application/json' -d @- <<'JSON'
+     {"version":"4","status":"firing","alerts":[{"status":"firing",
+       "labels":{"alertname":"NodeDown","severity":"critical",
+                 "instance":"overcloud-compute-0:9100","site":"lab"},
+       "annotations":{"summary":"synthetic test"},"startsAt":"2026-01-01T00:00:00Z"}]}
+     JSON
+
+   Then force correlation instead of waiting {{ .Values.settings.correlation.window_seconds }}s:
+
+     oc exec deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -- \
+       curl -sS -XPOST localhost:8080/correlation/flush
+
+{{- if not .Values.secrets.existingSecret }}
+{{- if not .Values.secrets.sshPrivateKey }}
+
+WARNING: no SSH private key is configured, so the Node Agent cannot reach any director and every
+incident will be investigated from metrics alone. Set secrets.sshPrivateKey, or point
+secrets.existingSecret at a Secret you created out of band (preferred — keys do not belong in a
+values file).
+{{- end }}
+{{- end }}

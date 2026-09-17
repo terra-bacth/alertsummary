@@ -1,0 +1,26 @@
+# Runtime tunables. Every value can be overridden by a TSAGENT_-prefixed env var using a double
+# underscore for nesting (e.g. TSAGENT_CORRELATION__WINDOW_SECONDS=60), so a running pod can be
+# nudged without editing the ConfigMap.
+
+correlation:
+  # A group is promoted to an incident once it has been quiet for this long...
+  window_seconds: 60
+  # ...or once it has been open this long, whichever comes first. Without the cap, a node that
+  # alarms continuously would refresh its own window forever and never get investigated.
+  max_group_age_seconds: 900
+  sweep_interval_seconds: 15
+
+reflection:
+  # First knob to turn if CPU-inference latency hurts: each reflection is an extra LLM call.
+  enabled: true
+  max_retries: 2
+
+investigation:
+  max_promql_queries: 6
+  max_node_commands: 5
+  # Below this evidence-confidence the decision node escalates to node (SSH) investigation.
+  node_access_threshold: 0.7
+
+report:
+  # POST the rendered report here when an incident closes. Empty disables notification.
+  notify_webhook: ""
