@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 
-from tsagent.models import Alarm, AMWebhook
+from tsagent.models import Alarm, AMWebhook, IncidentStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -122,3 +124,144 @@ def _far_future():
     from tsagent.models import utcnow
 
     return utcnow() + timedelta(days=365)
+
+
+# ---------------------------------------------------------------------------
+# Observability endpoints for the dashboard: live stream, event history, overview
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/stream")
+async def event_stream(request: Request) -> StreamingResponse:
+    """Server-Sent Events stream of everything happening in tsagent.
+
+    The dashboard opens this once and paints from it. Each event is a JSON line with an ``event:``
+    field set to its dotted type, and a ``seq`` field usable with ``/api/events?after=`` to resume
+    after a dropped connection without replaying history.
+    """
+    bus = getattr(request.app.state, "events_bus", None)
+    collector = getattr(request.app.state, "events", None)
+
+    async def generate():
+        queue = bus.subscribe() if bus else None
+        try:
+            # Seed the stream with recent history so a fresh page is never empty.
+            if collector is not None:
+                for event in collector.recent(limit=200):
+                    yield _sse(event.summary_dict(), event_type=event.type, seq=event.sequence)
+            yield ": connected\n\n"
+            if queue is None:
+                yield _sse(
+                    {"type": "system", "status": "warn", "title": "Event stream not available"},
+                    event_type="system",
+                )
+                return
+            while True:
+                try:
+                    payload = await queue.get()
+                except asyncio.CancelledError:
+                    return
+                yield _sse(payload, event_type=payload.get("type"), seq=payload.get("seq"))
+        finally:
+            if queue is not None:
+                bus.unsubscribe(queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(payload: dict, event_type: str | None = None, seq: int | None = None) -> str:
+    lines: list[str] = []
+    if seq is not None:
+        lines.append(f"id: {seq}")
+    if event_type:
+        lines.append(f"event: {event_type}")
+    lines.append(f"data: {json.dumps(payload, default=str)}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+@router.get("/api/events")
+async def list_events(
+    request: Request,
+    incident_id: str | None = None,
+    limit: int = Query(default=200, ge=1, le=2000),
+    after: int | None = None,
+) -> list:
+    """Event history. ``after=`` is a sequence number; passes are live events only."""
+    collector = getattr(request.app.state, "events", None)
+    if collector is None:
+        return []
+    events = collector.recent(limit=limit, after=after)
+    if incident_id:
+        events = [e for e in events if e.incident_id == incident_id]
+    return [e.summary_dict() for e in events]
+
+
+@router.post("/api/demo", status_code=202)
+async def trigger_demo(request: Request, background: bool = True) -> dict:
+    """Start one scripted incident through the real event system and data store.
+
+    Useful for a live demo of the dashboard without a real AlertManager/LLM/SSH estate. Returns
+    immediately; watch /api/stream for the replay.
+    """
+    demo = getattr(request.app.state, "demo", None)
+    if demo is None:
+        raise HTTPException(status_code=503, detail="demo driver not available")
+    if demo._task and not demo._task.done():
+        return {"started": False, "incident_id": demo.scenario_id, "running": True}
+    if background:
+        demo.submit()
+        return {"started": True, "incident_id": demo.scenario_id}
+    incident_id = await demo.run()
+    return {"started": True, "incident_id": incident_id}
+
+
+@router.get("/api/overview")
+async def overview(request: Request) -> dict:
+    """One call giving the dashboard all the top-level state it needs to render."""
+    repo = request.app.state.repo
+    correlator = getattr(request.app.state, "correlator", None)
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+
+    incidents = await repo.list_incidents(limit=100)
+    alarms = await repo.list_alarms(limit=200)
+    open_alarms = [a for a in alarms if a.status != "resolved"]
+
+    by_status: dict[str, int] = {}
+    for inc in incidents:
+        by_status[inc.status.value] = by_status.get(inc.status.value, 0) + 1
+
+    pending = correlator.pending_summary() if correlator else []
+
+    return {
+        "incidents": [i.model_dump(mode="json") for i in incidents],
+        "alarms": [a.model_dump(mode="json") for a in alarms],
+        "counts": {
+            "incidents": len(incidents),
+            "open_alarms": len(open_alarms),
+            "alarms": len(alarms),
+            "investigating": by_status.get(IncidentStatus.INVESTIGATING.value, 0),
+            "open": by_status.get(IncidentStatus.OPEN.value, 0),
+            "reported": by_status.get(IncidentStatus.REPORTED.value, 0),
+            "failed": by_status.get(IncidentStatus.FAILED.value, 0),
+        },
+        "by_status": by_status,
+        "pending_groups": pending,
+        "in_flight": orchestrator.in_flight if orchestrator else 0,
+        "collections": {
+            "incidents": "/incidents",
+            "alarms": "/alarms",
+            "pending": "/correlation/pending",
+            "report": "/incidents/{id}/report",
+            "events": "/api/events",
+            "stream": "/api/stream",
+        },
+    }

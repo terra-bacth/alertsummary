@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from tsagent.events import emit
 from tsagent.graph.context import affected_nodes, evidence_digest, incident_header
 from tsagent.graph.deps import GraphDeps
 from tsagent.graph.schemas import Decision
@@ -38,6 +39,17 @@ SYSTEM = (
 
 
 async def decide_node(state: IncidentState, deps: GraphDeps) -> dict:
+    await emit(
+        deps.events,
+        type="agent.started",
+        status="running",
+        incident_id=state.get("incident_id", ""),
+        cluster=state.get("cluster", ""),
+        agent="decision",
+        step="decide",
+        title="Deciding whether node access is needed",
+        detail="Metrics-only resolution, or escalate to SSH on the node?",
+    )
     evidence = state.get("promql_evidence") or []
     nodes = affected_nodes(state)
 
@@ -45,6 +57,18 @@ async def decide_node(state: IncidentState, deps: GraphDeps) -> dict:
     if verdict:
         decision, reason = verdict
         logger.info("decision (rule): %s — %s", decision, reason)
+        await emit(
+            deps.events,
+            type="decision.made",
+            status="ok",
+            incident_id=state.get("incident_id", ""),
+            cluster=state.get("cluster", ""),
+            agent="decision",
+            step="decide",
+            title="Decision (rule) — " + ("escalate to node" if decision == "need_node_access" else "metrics suffice"),
+            detail=reason,
+            data={"decision": decision, "target_nodes": nodes, "reason": reason},
+        )
         return {"decision": decision, "decision_reason": reason, "target_nodes": nodes}
 
     messages = [
@@ -67,6 +91,18 @@ async def decide_node(state: IncidentState, deps: GraphDeps) -> dict:
         # Defaulting to "sufficient" keeps a degraded run read-only rather than sending an
         # unreviewed agent onto production nodes.
         logger.warning("decision LLM unavailable, reporting on metrics alone: %s", exc)
+        await emit(
+            deps.events,
+            type="decision.fallback",
+            status="warn",
+            incident_id=state.get("incident_id", ""),
+            cluster=state.get("cluster", ""),
+            agent="decision",
+            step="decide",
+            title="Decision model offline — staying metrics-only",
+            detail=str(exc),
+            data={"decision": "sufficient", "target_nodes": nodes},
+        )
         return {
             "decision": "sufficient",
             "decision_reason": f"decision model unavailable ({exc})",
@@ -76,6 +112,18 @@ async def decide_node(state: IncidentState, deps: GraphDeps) -> dict:
 
     targets = [n for n in decision.target_nodes if n in nodes] or nodes
     logger.info("decision (llm): %s — %s", decision.decision, decision.reason)
+    await emit(
+        deps.events,
+        type="decision.made",
+        status="ok",
+        incident_id=state.get("incident_id", ""),
+        cluster=state.get("cluster", ""),
+        agent="decision",
+        step="decide",
+        title="Decision (LLM) — " + ("escalate to node" if decision.decision == "need_node_access" else "metrics suffice"),
+        detail=decision.reason,
+        data={"decision": decision.decision, "target_nodes": targets, "reason": decision.reason},
+    )
     return {
         "decision": decision.decision,
         "decision_reason": decision.reason,

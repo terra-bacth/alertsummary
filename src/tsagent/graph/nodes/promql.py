@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 
+from tsagent.events import emit
 from tsagent.graph.context import affected_nodes, incident_header, metric_namespaces
 from tsagent.graph.deps import GraphDeps
 from tsagent.graph.schemas import QueryBatch
@@ -33,8 +34,30 @@ SYSTEM = (
 
 async def promql_node(state: IncidentState, deps: GraphDeps) -> dict:
     cluster = state.get("cluster") or ""
+    await emit(
+        deps.events,
+        type="agent.started",
+        status="running",
+        incident_id=state.get("incident_id", ""),
+        cluster=cluster,
+        agent="promql",
+        step="promql",
+        title="PromQL agent generating queries",
+        detail="Turning the plan's checks into PromQL and executing them against Prometheus.",
+    )
     client = deps.prometheus_for(cluster)
     if client is None:
+        await emit(
+            deps.events,
+            type="agent.skipped",
+            status="warn",
+            incident_id=state.get("incident_id", ""),
+            cluster=cluster,
+            agent="promql",
+            step="promql",
+            title="Prometheus skipped",
+            detail=f"No Prometheus is configured for cluster {cluster!r}; metrics skipped.",
+        )
         return {
             "caveats": [f"No Prometheus is configured for cluster {cluster!r}; metrics skipped."]
         }
@@ -120,6 +143,18 @@ async def promql_node(state: IncidentState, deps: GraphDeps) -> dict:
             logger.warning(
                 "rejecting instant query with range vector: %s", scoped,
             )
+            await emit(
+                deps.events,
+                type="query.rejected",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                agent="promql",
+                step="promql",
+                title="Query rejected — range vector in instant query",
+                detail=f"{scoped}",
+                data={"goal": query.goal, "promql": scoped},
+            )
             evidence.append(
                 {
                     "kind": "promql",
@@ -143,6 +178,18 @@ async def promql_node(state: IncidentState, deps: GraphDeps) -> dict:
             if suggestions:
                 detail += f". Did you mean: {', '.join(suggestions)}?"
             logger.warning("rejected query %r: %s", scoped, detail)
+            await emit(
+                deps.events,
+                type="query.rejected",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                agent="promql",
+                step="promql",
+                title="Query not executed — unknown metric",
+                detail=detail,
+                data={"goal": query.goal, "promql": scoped},
+            )
             evidence.append(
                 {
                     "kind": "promql",
@@ -194,10 +241,61 @@ async def promql_node(state: IncidentState, deps: GraphDeps) -> dict:
             # so stop rather than producing a wall of the same error. Persisted first, so the
             # reason the investigation stopped is in the audit trail.
             logger.error("prometheus unreachable for cluster %s: %s", cluster, result.error)
+            await emit(
+                deps.events,
+                type="query.unreachable",
+                status="error",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                agent="promql",
+                step="promql",
+                title="Prometheus unreachable",
+                detail=result.error,
+                data={"goal": query.goal, "promql": scoped},
+            )
             break
+
+        # Successful or query-level failure: both are worth showing on the live timeline.
+        if result.ok:
+            await emit(
+                deps.events,
+                type="query.executed",
+                status="ok",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                agent="promql",
+                step="promql",
+                title=f"Query answered — {query.goal}",
+                detail=scoped,
+                data={"goal": query.goal, "promql": scoped, "result": record["result"]},
+            )
+        else:
+            await emit(
+                deps.events,
+                type="query.failed",
+                status="error",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                agent="promql",
+                step="promql",
+                title=f"Query failed — {query.goal}",
+                detail=record["result"],
+                data={"goal": query.goal, "promql": scoped, "result": record["result"]},
+            )
 
     failures = sum(1 for e in evidence if not e["ok"])
     logger.info("promql step collected %d results (%d failed)", len(evidence), failures)
+    await emit(
+        deps.events,
+        type="agent.completed",
+        status="ok" if not failures else ("warn" if not all(not e.get("ok") for e in evidence) else "error"),
+        incident_id=state.get("incident_id", ""),
+        cluster=cluster,
+        agent="promql",
+        step="promql",
+        title=f"PromQL step done — {len(evidence)} results",
+        detail=f"{len(evidence) - failures} ok, {failures} failed.",
+    )
     return {"promql_evidence": evidence}
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from tsagent.events import emit
 from tsagent.graph.context import evidence_digest, incident_header
 from tsagent.graph.deps import GraphDeps
 from tsagent.graph.schemas import RCA
@@ -40,6 +41,17 @@ SYSTEM = (
 
 
 async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
+    await emit(
+        deps.events,
+        type="agent.started",
+        status="running",
+        incident_id=state.get("incident_id", ""),
+        cluster=state.get("cluster", ""),
+        agent="report",
+        step="report",
+        title="Report agent drafting RCA",
+        detail="Synthesizing evidence into a root-cause analysis and recommendations.",
+    )
     promql_evidence = state.get("promql_evidence") or []
     node_evidence = state.get("node_evidence") or []
     plan = state.get("plan") or {}
@@ -68,6 +80,17 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
         rca = await deps.gateway.complete_json("report", messages, RCA, max_tokens=900)
     except LLMError as exc:
         logger.error("RCA generation failed: %s", exc)
+        await emit(
+            deps.events,
+            type="agent.fallback",
+            status="warn",
+            incident_id=state.get("incident_id", ""),
+            cluster=state.get("cluster", ""),
+            agent="report",
+            step="report",
+            title="Report model unavailable",
+            detail=str(exc),
+        )
         rca = RCA(
             root_cause="Undetermined — the reporting model was unavailable.",
             confidence=0.0,
@@ -139,5 +162,22 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
     logger.info(
         "report ready: incident=%s confidence=%.2f recommendations=%d",
         state["incident_id"], rca.confidence, len(rca.recommendations),
+    )
+    await emit(
+        deps.events,
+        type="report.ready",
+        status="ok",
+        incident_id=state.get("incident_id", ""),
+        cluster=state.get("cluster", ""),
+        agent="report",
+        step="report",
+        title="Report ready",
+        detail=rca.root_cause,
+        data={
+            "root_cause": rca.root_cause,
+            "confidence": rca.confidence,
+            "recommendations": rca.recommendations,
+            "caveats": caveats,
+        },
     )
     return {"report": report.model_dump(mode="json"), "caveats": []}

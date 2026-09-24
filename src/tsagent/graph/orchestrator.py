@@ -97,10 +97,30 @@ class Orchestrator:
         state = await self.build_initial_state(incident)
         config = {"configurable": {"thread_id": incident.id}}
         logger.info("investigating incident %s (%d alarms)", incident.id, len(state["alarms"]))
+        await _emit(
+            self,
+            type="incident.started",
+            status="running",
+            incident_id=incident.id,
+            cluster=incident.cluster,
+            step="investigate",
+            title="Investigation started",
+            detail=f"{incident.summary or incident.group_key} — {len(state['alarms'])} alarm(s).",
+        )
         try:
             return await self._graph.ainvoke(state, config=config)
         except Exception:
             logger.exception("investigation of %s failed", incident.id)
+            await _emit(
+                self,
+                type="incident.failed",
+                status="error",
+                incident_id=incident.id,
+                cluster=incident.cluster,
+                step="investigate",
+                title="Investigation failed",
+                detail="The investigation run raised an exception; see pod logs.",
+            )
             if self.deps.repo:
                 incident.status = IncidentStatus.FAILED
                 await self.deps.repo.save_incident(incident)
@@ -143,3 +163,32 @@ class Orchestrator:
     @property
     def in_flight(self) -> int:
         return len(self._tasks)
+
+
+async def _emit(
+    orchestrator: Orchestrator,
+    *,
+    type: str,
+    status: str = "info",
+    incident_id: str = "",
+    cluster: str = "",
+    node: str = "",
+    step: str = "",
+    title: str = "",
+    detail: str = "",
+) -> None:
+    """Forward an orchestrator-level event through the shared collector, if present."""
+    from tsagent.events import emit
+
+    await emit(
+        getattr(orchestrator.deps, "events", None),
+        type=type,
+        status=status,
+        incident_id=incident_id,
+        cluster=cluster,
+        node=node,
+        agent="orchestrator",
+        step=step,
+        title=title,
+        detail=detail,
+    )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 
+from tsagent.events import emit
 from tsagent.graph.context import evidence_digest, incident_header
 from tsagent.graph.deps import GraphDeps
 from tsagent.graph.schemas import NodeCommand
@@ -29,8 +30,30 @@ SYSTEM = (
 
 async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
     cluster = state.get("cluster") or ""
+    await emit(
+        deps.events,
+        type="agent.started",
+        status="running",
+        incident_id=state.get("incident_id", ""),
+        cluster=cluster,
+        agent="node_agent",
+        step="node",
+        title="Node agent connecting over SSH",
+        detail="Resolving the director hop and preparing allow-listed commands.",
+    )
     executor = deps.ssh_for(cluster)
     if executor is None:
+        await emit(
+            deps.events,
+            type="agent.skipped",
+            status="warn",
+            incident_id=state.get("incident_id", ""),
+            cluster=cluster,
+            agent="node_agent",
+            step="node",
+            title="Node access skipped",
+            detail=f"No director is configured for cluster {cluster!r}; SSH skipped.",
+        )
         return {"caveats": [f"No director is configured for cluster {cluster!r}; SSH skipped."]}
 
     targets = state.get("target_nodes") or []
@@ -91,6 +114,18 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
             proposal = await deps.gateway.complete_json("node_agent", messages, NodeCommand)
         except LLMError as exc:
             logger.error("node agent could not get a command: %s", exc)
+            await emit(
+                deps.events,
+                type="agent.fallback",
+                status="error",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=node,
+                agent="node_agent",
+                step="node",
+                title="Node agent could not get a command",
+                detail=str(exc),
+            )
             return {
                 "node_evidence": collected,
                 "caveats": [f"Node investigation stopped early ({exc})."],
@@ -98,6 +133,18 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
 
         if proposal.done or not proposal.command.strip():
             logger.info("node agent finished after %d command(s)", len(collected))
+            await emit(
+                deps.events,
+                type="agent.completed",
+                status="ok",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=node,
+                agent="node_agent",
+                step="node",
+                title="Node agent done",
+                detail=f"{len(collected)} command(s) ran on {node}.",
+            )
             break
 
         target = proposal.node.strip() or node
@@ -120,6 +167,19 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
                 "Use `sudo pcs resource status` or `sudo pcs status` instead."
             )
             logger.warning("redirecting systemctl-on-bundle to pcs: %s", proposal.command)
+            await emit(
+                deps.events,
+                type="cmd.redirected",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=target,
+                agent="node_agent",
+                step="node",
+                title="Command redirected — pacemaker bundle via systemctl",
+                detail=hint,
+                data={"command": proposal.command, "target": target},
+            )
             record = {
                 "kind": "node_cmd",
                 "goal": proposal.rationale,
@@ -147,6 +207,19 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
             # `cat /proc/meminfo` a dozen times). Record it as a note and push the model
             # to choose a different, narrower command instead of burning the budget.
             logger.warning("node agent repeated an already-run command: %s", proposal.command)
+            await emit(
+                deps.events,
+                type="cmd.repeated",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=target,
+                agent="node_agent",
+                step="node",
+                title="Repeat command blocked",
+                detail=f"{proposal.command} already ran with the same result — a different command is needed.",
+                data={"command": proposal.command, "target": target},
+            )
             record = {
                 "kind": "node_cmd",
                 "goal": proposal.rationale,
@@ -187,6 +260,22 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
                 # It has been told already. Repeating the same refusal is not evidence, and the
                 # loop is plainly not converging.
                 logger.error("node agent repeated a refused command; abandoning node access")
+                await emit(
+                    deps.events,
+                    type="cmd.refused",
+                    status="error",
+                    incident_id=state.get("incident_id", ""),
+                    cluster=cluster,
+                    node=target,
+                    agent="node_agent",
+                    step="node",
+                    title="Node access abandoned — repeated refusals",
+                    detail=(
+                        f"The agent kept proposing commands the allow-list refuses "
+                        f"(last: {proposal.command!r})."
+                    ),
+                    data={"command": proposal.command, "target": target},
+                )
                 return {
                     "node_evidence": collected,
                     "caveats": [
@@ -198,6 +287,19 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
                     ],
                 }
             refused.append(proposal.command)
+            await emit(
+                deps.events,
+                type="cmd.refused",
+                status="refused",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=target,
+                agent="node_agent",
+                step="node",
+                title="Command refused by allow-list",
+                detail=str(exc),
+                data={"command": proposal.command, "target": target},
+            )
             record = {
                 "kind": "node_cmd",
                 "goal": proposal.rationale,
@@ -207,6 +309,20 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
             }
 
         collected.append(record)
+        if record.get("ok"):
+            await emit(
+                deps.events,
+                type="cmd.executed",
+                status="ok",
+                incident_id=state.get("incident_id", ""),
+                cluster=cluster,
+                node=target,
+                agent="node_agent",
+                step="node",
+                title=f"Command ran — {proposal.rationale or proposal.command}",
+                detail=proposal.command,
+                data={"command": proposal.command, "target": target, "result": record["result"]},
+            )
         if deps.repo:
             await deps.repo.save_evidence(
                 Evidence(
@@ -220,6 +336,18 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
             )
     else:
         logger.info("node agent hit the %d command budget", max_commands)
+        await emit(
+            deps.events,
+            type="agent.completed",
+            status="warn",
+            incident_id=state.get("incident_id", ""),
+            cluster=cluster,
+            node=node,
+            agent="node_agent",
+            step="node",
+            title="Node budget reached",
+            detail=f"Node investigation stopped at the {max_commands}-command budget.",
+        )
         return {
             "node_evidence": collected,
             "caveats": [f"Node investigation stopped at the {max_commands}-command budget."],

@@ -8,6 +8,11 @@ import aiosqlite
 
 from tsagent.models import Alarm, Evidence, Incident, Report
 
+try:  # events live in their own module, imported lazily to avoid a cycle
+    from tsagent.events import Event as _Event
+except Exception:  # noqa: BLE001 - events.py always exists; guard is belt and braces
+    _Event = None  # type: ignore[assignment]
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS alarms (
     id TEXT PRIMARY KEY,
@@ -42,6 +47,16 @@ CREATE TABLE IF NOT EXISTS reports (
     data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_reports_incident ON reports(incident_id);
+
+CREATE TABLE IF NOT EXISTS events (
+    id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
+    incident_id TEXT NOT NULL,
+    ts TEXT NOT NULL,
+    data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_incident ON events(incident_id);
+CREATE INDEX IF NOT EXISTS idx_events_seq ON events(seq);
 """
 
 
@@ -175,3 +190,52 @@ class Repository:
         )
         row = await cur.fetchone()
         return Report.model_validate_json(row["data"]) if row else None
+
+    # -- events -------------------------------------------------------------
+
+    async def save_event(self, event, sequence: int) -> None:
+        """Persist one tsagent event. Imported lazily so the schema stays loader-agnostic."""
+        if (_Event is not None and isinstance(event, _Event)) or hasattr(
+            event, "model_dump_json"
+        ):
+            data = event.model_dump_json()
+        else:  # pragma: no cover - defensive; callers pass Event instances
+            data = str(event)
+        await self.db.execute(
+            "INSERT OR REPLACE INTO events (id, seq, incident_id, ts, data) VALUES (?, ?, ?, ?, ?)",
+            (event.id, sequence, event.incident_id, event.ts.isoformat(), data),
+        )
+        await self.db.commit()
+
+    async def list_events(self, incident_id: str | None = None, limit: int = 4000) -> list:
+        """Recent events, optionally scoped to one incident.
+
+        Uses a tolerant loader that falls back to a dict so the repository does not hard-depend
+        on the events module resolving at runtime.
+        """
+        if incident_id:
+            cur = await self.db.execute(
+                "SELECT data FROM events WHERE incident_id = ? ORDER BY seq DESC LIMIT ?",
+                (incident_id, limit),
+            )
+        else:
+            cur = await self.db.execute(
+                "SELECT data FROM events ORDER BY seq DESC LIMIT ?", (limit,)
+            )
+        rows = await cur.fetchall()
+        events: list[object] = []
+        for row in reversed(rows):  # chronological order, oldest first
+            data = row["data"]
+            try:
+                if _Event is not None:
+                    events.append(_Event.model_validate_json(data))
+                    continue
+            except Exception:  # noqa: BLE001, S110 - fall back to plain dict below
+                pass
+            import json as _json
+
+            try:
+                events.append(_json.loads(data))
+            except ValueError:
+                continue
+        return events

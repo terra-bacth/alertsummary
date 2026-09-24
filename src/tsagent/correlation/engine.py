@@ -23,6 +23,38 @@ logger = logging.getLogger(__name__)
 IncidentHandler = Callable[[Incident], Awaitable[None]]
 
 
+async def _emit(
+    engine: CorrelationEngine,
+    *,
+    type: str,
+    status: str = "info",
+    incident_id: str = "",
+    cluster: str = "",
+    node: str = "",
+    agent: str = "correlator",
+    step: str = "correlate",
+    title: str = "",
+    detail: str = "",
+    data: dict | None = None,
+) -> None:
+    """Forward a correlation-level event through the shared collector, if present."""
+    from tsagent.events import emit
+
+    await emit(
+        engine.events,
+        type=type,
+        status=status,
+        incident_id=incident_id,
+        cluster=cluster,
+        node=node,
+        agent=agent,
+        step=step,
+        title=title,
+        detail=detail,
+        data=data,
+    )
+
+
 class AlarmGroup:
     """Alarms buffered under one grouping key, deduped by fingerprint."""
 
@@ -77,11 +109,13 @@ class CorrelationEngine:
         inventory: ClusterInventory,
         repo: Repository | None = None,
         on_incident: IncidentHandler | None = None,
+        events: object | None = None,
     ):
         self.config = config
         self.inventory = inventory
         self.repo = repo
         self.on_incident = on_incident
+        self.events = events
         self.groups: dict[str, AlarmGroup] = {}
         self._lock = asyncio.Lock()
         self._sweeper: asyncio.Task | None = None
@@ -115,6 +149,18 @@ class CorrelationEngine:
             "alarm buffered: group=%s name=%s status=%s severity=%s (group holds %d)",
             key, alarm.name, alarm.status, alarm.severity, len(group.alarms),
         )
+        await _emit(
+            self,
+            type="alarm.buffered",
+            status="info",
+            cluster=cluster,
+            node=alarm.node,
+            agent="correlator",
+            step="correlate",
+            title=f"{alarm.name} buffered",
+            detail=f"{alarm.status} [{alarm.severity}] on {scope} — group holds {len(group.alarms)}.",
+            data={"alarm": alarm.model_dump(mode="json")},
+        )
 
     # -- promotion ----------------------------------------------------------
 
@@ -138,6 +184,16 @@ class CorrelationEngine:
         if not firing:
             # Everything in the group resolved itself inside the window — nothing to investigate.
             logger.info("group %s self-resolved, no incident raised", group.key)
+            await _emit(
+                self,
+                type="correlate.resolved",
+                status="ok",
+                cluster=group.cluster,
+                agent="correlator",
+                step="correlate",
+                title="Group self-resolved",
+                detail=f"{group.scope} went quiet inside the window — no incident raised.",
+            )
             return None
 
         incident = Incident(
@@ -157,6 +213,18 @@ class CorrelationEngine:
         logger.info(
             "incident raised: id=%s cluster=%s group=%s alarms=%d",
             incident.id, incident.cluster, incident.group_key, len(firing),
+        )
+        await _emit(
+            self,
+            type="incident.opened",
+            status="ok",
+            incident_id=incident.id,
+            cluster=incident.cluster,
+            agent="correlator",
+            step="correlate",
+            title="Incident opened",
+            detail=incident.summary,
+            data={"incident": incident.model_dump(mode="json")},
         )
         if self.on_incident:
             await self.on_incident(incident)

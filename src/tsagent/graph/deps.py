@@ -23,6 +23,7 @@ class GraphDeps:
     allowlist: AllowList
     repo: Repository | None = None
     config_dir: Path = Path("config")
+    events: object | None = None  # EventCollector, when the UI/observability layer is enabled
     prometheus_factory: Callable[[str], PrometheusClient | None] | None = None
     ssh_factory: Callable[[str], SSHExecutor | None] | None = None
     knowledge_factory: Callable[[str], Knowledge] | None = None

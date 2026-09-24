@@ -19,6 +19,31 @@ AlertManager ──webhook──► Ingest API ──► Correlation Engine ─�
 
 Full architecture & phased plan: [`.hermes/plans/2026-08-05_troubleshooting-agent-plan.md`](.hermes/plans/2026-08-05_troubleshooting-agent-plan.md)
 
+## Dashboard (live "mission control" UI)
+
+A cinematic, real-time React dashboard lives in [`web/`](web/). It subscribes to a
+Server-Sent Events feed and paints every investigation live — ingest → correlate → plan →
+promql → reflect → decide → node (SSH) → reflect → report — with an animated pipeline strip,
+a per-incident event timeline, and the rendered RCA report.
+
+The backend emits typed events for every step it takes (queries, reflections/retries,
+allow-list refusals, SSH commands, the final report). The event layer is optional and additive:
+a deployment compiled without the UI keeps working exactly as before.
+
+```bash
+cd web && npm install && npm run dev        # dev server, proxies /api → localhost:8080
+TSAGENT_BACKEND=https://<route> npm run dev # point at a deployed OpenShift Route
+```
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/stream` | Live event feed (SSE) — what the dashboard paints from |
+| `GET /api/events?after=<seq>` | Event history / reconnect resume |
+| `GET /api/overview` | Incidents, alarms, counts, pending correlation groups |
+| `POST /api/demo` | Replay a scripted incident through the real event system (no LLM/SSH needed) |
+
+See [`web/README.md`](web/README.md) for full UI docs.
+
 ## Dev setup
 
 ```bash

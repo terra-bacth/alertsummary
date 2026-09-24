@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 
+from tsagent.events import emit
 from tsagent.graph.context import evidence_digest, incident_header
 from tsagent.graph.deps import GraphDeps
 from tsagent.graph.schemas import Reflection
@@ -36,6 +37,17 @@ def make_reflection_node(
     """Build the reflection node for one step of the graph."""
 
     async def reflect(state: IncidentState) -> dict:
+        await emit(
+            deps.events,
+            type="agent.started",
+            status="running",
+            incident_id=state.get("incident_id", ""),
+            cluster=state.get("cluster", ""),
+            agent="reflection",
+            step=f"reflect_{step}",
+            title=f"Reflecting on {step} output",
+            detail="Self-correction checkpoint reviewing the evidence just collected.",
+        )
         config = deps.app_config.reflection
         retries = dict(state.get("retries") or {})
         used = retries.get(step, 0)
@@ -53,6 +65,17 @@ def make_reflection_node(
         if evidence and all(item.get("unreachable") for item in evidence):
             detail = evidence[0].get("result", "")
             logger.error("skipping %s reflection: backend unreachable (%s)", step, detail)
+            await emit(
+                deps.events,
+                type="reflection.skipped",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=state.get("cluster", ""),
+                agent="reflection",
+                step=f"reflect_{step}",
+                title=f"Reflection skipped — {step} backend unreachable",
+                detail=detail,
+            )
             return {
                 "reflections": [
                     {"step": step, "verdict": "OK", "feedback": "backend unreachable"}
@@ -68,6 +91,17 @@ def make_reflection_node(
         if used >= config.max_retries:
             note = f"Accepted {step} evidence after {used} retries without a clean verdict."
             logger.info("reflection budget exhausted for step=%s", step)
+            await emit(
+                deps.events,
+                type="reflection.exhausted",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=state.get("cluster", ""),
+                agent="reflection",
+                step=f"reflect_{step}",
+                title=f"Retry budget exhausted for {step}",
+                detail=note,
+            )
             return {
                 "reflections": [{"step": step, "verdict": "OK", "feedback": "budget exhausted"}],
                 "caveats": [note],
@@ -91,6 +125,17 @@ def make_reflection_node(
         except LLMError as exc:
             # A reflector that cannot be reached must not block the incident.
             logger.warning("reflection unavailable for step=%s: %s", step, exc)
+            await emit(
+                deps.events,
+                type="reflection.offline",
+                status="warn",
+                incident_id=state.get("incident_id", ""),
+                cluster=state.get("cluster", ""),
+                agent="reflection",
+                step=f"reflect_{step}",
+                title=f"Reflector offline — {step} accepted",
+                detail=str(exc),
+            )
             return {
                 "reflections": [{"step": step, "verdict": "OK", "feedback": "reflector offline"}],
                 "caveats": [f"Reflection on the {step} step was skipped ({exc})."],
@@ -102,6 +147,31 @@ def make_reflection_node(
             logger.info(
                 "reflection asked for retry of step=%s (%d/%d): %s",
                 step, retries[step], config.max_retries, reflection.feedback,
+            )
+            await emit(
+                deps.events,
+                type="reflection.retry",
+                status="retry",
+                incident_id=state.get("incident_id", ""),
+                cluster=state.get("cluster", ""),
+                agent="reflection",
+                step=f"reflect_{step}",
+                title=f"Reflection demands a retry of {step}",
+                detail=reflection.feedback,
+                data={"step": step, "retry": retries[step], "max": config.max_retries},
+            )
+        else:
+            await emit(
+                deps.events,
+                type="reflection.approved",
+                status="ok",
+                incident_id=state.get("incident_id", ""),
+                cluster=state.get("cluster", ""),
+                agent="reflection",
+                step=f"reflect_{step}",
+                title=f"{step} output accepted",
+                detail=reflection.feedback or "Reflector approved the evidence.",
+                data={"step": step},
             )
         return {
             "reflections": [
