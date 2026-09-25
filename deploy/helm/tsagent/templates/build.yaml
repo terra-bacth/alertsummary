@@ -1,0 +1,74 @@
+{{- if .Values.build.enabled }}
+{{- $b := .Values.build }}
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: {{ include "tsagent.imageStreamName" . }}
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+  {{- include "tsagent.annotations" (dict "root" .) }}
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: {{ include "tsagent.fullname" . }}
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+  {{- include "tsagent.annotations" (dict "root" .) }}
+spec:
+  runPolicy: {{ $b.runPolicy }}
+  successfulBuildsHistoryLimit: {{ $b.successfulBuildsHistoryLimit }}
+  failedBuildsHistoryLimit: {{ $b.failedBuildsHistoryLimit }}
+  source:
+    type: Git
+    git:
+      uri: {{ $b.git.uri | quote }}
+      ref: {{ $b.git.ref | quote }}
+    {{- with $b.git.contextDir }}
+    contextDir: {{ . | quote }}
+    {{- end }}
+    {{- with $b.git.sourceSecret }}
+    sourceSecret:
+      name: {{ . }}
+    {{- end }}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: {{ $b.dockerfilePath }}
+      buildArgs:
+        - name: VERSION
+          value: {{ .Chart.AppVersion | quote }}
+        {{- range $name, $value := $b.args }}
+        - name: {{ $name }}
+          value: {{ $value | toString | quote }}
+        {{- end }}
+      {{- with $b.env }}
+      env:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  output:
+    to:
+      kind: ImageStreamTag
+      name: {{ include "tsagent.imageStreamName" . }}:{{ $b.outputTag }}
+  {{- with $b.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $b.nodeSelector }}
+  nodeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  triggers:
+    {{- if $b.triggers.configChange }}
+    - type: ConfigChange
+    {{- end }}
+    {{- range $b.triggers.webhooks }}
+    - type: {{ .type }}
+      {{ .type | lower }}:
+        secretReference:
+          name: {{ .secretName }}
+    {{- end }}
+{{- end }}

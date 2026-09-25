@@ -31,6 +31,9 @@ dev = [
     "ruff>=0.4",
 ]
 
+[project.scripts]
+tsagent = "tsagent.__main__:main"
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

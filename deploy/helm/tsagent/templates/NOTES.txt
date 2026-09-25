@@ -1,52 +1,83 @@
-tsagent {{ .Chart.AppVersion }} is installed as {{ include "tsagent.fullname" . }}.
+{{- $fullname := include "tsagent.fullname" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $settings := include "tsagent.settingsYaml" . | fromYaml -}}
+{{- $scheme := include "tsagent.httpScheme" . | lower -}}
+tsagent {{ .Chart.AppVersion }} is installed as {{ $fullname }} in {{ $ns }}.
+{{- if .Values.build.enabled }}
+
+0. Build the image in-cluster (a ConfigChange trigger usually starts the first build for you):
+
+     oc start-build {{ $fullname }} -n {{ $ns }} --follow
+{{- if .Values.build.autoDeploy }}
+   The Deployment rolls automatically whenever a build pushes {{ include "tsagent.imageStreamName" . }}:{{ .Values.build.outputTag }}.
+{{- end }}
+{{- end }}
 
 1. Check it came up:
 
-     oc rollout status deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }}
-     oc logs -f deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }}
+     oc rollout status deploy/{{ $fullname }} -n {{ $ns }}
+     oc logs -f deploy/{{ $fullname }} -n {{ $ns }}
 
 2. Point AlertManager at it. Inside the cluster the webhook URL is:
 
-     http://{{ include "tsagent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/alerts
-
-   Add to the AlertManager config:
+     {{ $scheme }}://{{ $fullname }}.{{ $ns }}.svc:{{ .Values.service.port }}/alerts
 
      receivers:
        - name: tsagent
          webhook_configs:
-           - url: http://{{ include "tsagent.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/alerts
+           - url: {{ $scheme }}://{{ $fullname }}.{{ $ns }}.svc:{{ .Values.service.port }}/alerts
              send_resolved: true
-
+{{- if .Values.tls.serviceServingCert.enabled }}
+             http_config:
+               tls_config:
+                 ca_file: /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+{{- end }}
 {{- if .Values.route.enabled }}
 
-3. Reports are readable through the Route:
+3. Dashboard and API through the Route:
 
-     oc get route {{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -o jsonpath='{.spec.host}{"\n"}'
+     HOST=$(oc get route {{ $fullname }} -n {{ $ns }} -o jsonpath='{.spec.host}')
+     echo https://$HOST/              # dashboard
      curl https://$HOST/incidents
-     curl https://$HOST/incidents/<id>/report?format=md
+     curl "https://$HOST/incidents/<id>/report?format=md"
 {{- end }}
 
 4. Fire a synthetic alarm to prove the path end to end:
 
-     oc exec deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -- \
-       curl -sS -XPOST localhost:8080/alerts -H 'Content-Type: application/json' -d @- <<'JSON'
-     {"version":"4","status":"firing","alerts":[{"status":"firing",
-       "labels":{"alertname":"NodeDown","severity":"critical",
-                 "instance":"overcloud-compute-0:9100","site":"lab"},
-       "annotations":{"summary":"synthetic test"},"startsAt":"2026-01-01T00:00:00Z"}]}
-     JSON
+     oc exec deploy/{{ $fullname }} -n {{ $ns }} -- python -c "import json,urllib.request,ssl; \
+       urllib.request.urlopen(urllib.request.Request('{{ $scheme }}://localhost:{{ .Values.containerPort }}/alerts', \
+       data=json.dumps({'version':'4','status':'firing','alerts':[{'status':'firing', \
+       'labels':{'alertname':'NodeDown','severity':'critical','instance':'overcloud-compute-0:9100'}, \
+       'annotations':{'summary':'synthetic test'},'startsAt':'2026-01-01T00:00:00Z'}]}).encode(), \
+       headers={'Content-Type':'application/json'}), context=ssl._create_unverified_context()).read()"
 
-   Then force correlation instead of waiting {{ .Values.settings.correlation.window_seconds }}s:
+   Then force correlation instead of waiting {{ dig "correlation" "window_seconds" 300 $settings }}s:
 
-     oc exec deploy/{{ include "tsagent.fullname" . }} -n {{ .Release.Namespace }} -- \
-       curl -sS -XPOST localhost:8080/correlation/flush
+     oc exec deploy/{{ $fullname }} -n {{ $ns }} -- python -c "import urllib.request,ssl; \
+       urllib.request.urlopen(urllib.request.Request('{{ $scheme }}://localhost:{{ .Values.containerPort }}/correlation/flush', \
+       method='POST'), context=ssl._create_unverified_context()).read()"
 
+5. Change config without rebuilding: edit your values and `helm upgrade` (the pod restarts on
+   config change), or nudge a single setting live:
+
+     oc set env deploy/{{ $fullname }} -n {{ $ns }} TSAGENT_CORRELATION__WINDOW_SECONDS=60
+
+   `helm test {{ .Release.Name }} -n {{ $ns }}` checks /readyz through the Service.
 {{- if not .Values.secrets.existingSecret }}
 {{- if not .Values.secrets.sshPrivateKey }}
 
-WARNING: no SSH private key is configured, so the Node Agent cannot reach any director and every
-incident will be investigated from metrics alone. Set secrets.sshPrivateKey, or point
-secrets.existingSecret at a Secret you created out of band (preferred — keys do not belong in a
-values file).
+NOTE: no SSH private key was given to the chart. Unless the directors use password auth
+(secrets.env.TSAGENT_DIRECTOR_PASSWORD), the Node Agent cannot reach any director and incidents are
+investigated from metrics alone. Prefer secrets.existingSecret over keys in a values file.
 {{- end }}
+{{- end }}
+{{- if not (include "tsagent.verifyHostKeys" .) }}
+
+WARNING: director host keys are NOT verified. Provide a known_hosts file (secrets.sshKnownHosts,
+or an sshKnownHosts key in your existing Secret with secrets.verifyHostKeys=true).
+{{- end }}
+{{- if dig "demo" "enabled" true $settings }}
+
+NOTE: the demo endpoint (POST /api/demo) is enabled; it writes scripted incidents into the case
+store. Disable it for production with settings.demo.enabled=false.
 {{- end }}

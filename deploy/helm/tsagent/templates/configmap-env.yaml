@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-env
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+  {{- include "tsagent.annotations" (dict "root" .) }}
+data:
+  {{- range $key, $value := .Values.env }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}
+  {{- with .Values.proxy }}
+  {{- if .httpProxy }}
+  HTTP_PROXY: {{ .httpProxy | quote }}
+  http_proxy: {{ .httpProxy | quote }}
+  {{- end }}
+  {{- if .httpsProxy }}
+  HTTPS_PROXY: {{ .httpsProxy | quote }}
+  https_proxy: {{ .httpsProxy | quote }}
+  {{- end }}
+  {{- if and (or .httpProxy .httpsProxy) .noProxy }}
+  NO_PROXY: {{ .noProxy | quote }}
+  no_proxy: {{ .noProxy | quote }}
+  {{- end }}
+  {{- end }}
+{{- if .Values.trustedCABundle.enabled }}
+---
+# OpenShift's Cluster Network Operator fills this with the cluster-wide trusted CA bundle
+# (system CAs + proxy/corporate CAs configured on the cluster Proxy object).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tsagent.fullname" . }}-trusted-ca
+  labels:
+    {{- include "tsagent.labels" . | nindent 4 }}
+    config.openshift.io/inject-trusted-cabundle: "true"
+  {{- include "tsagent.annotations" (dict "root" .) }}
+{{- end }}

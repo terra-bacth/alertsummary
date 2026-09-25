@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-import yaml
 from pydantic import BaseModel, ValidationError
+
+from tsagent.config import load_yaml
 
 logger = logging.getLogger(__name__)
 
@@ -169,8 +170,7 @@ class LLMGateway:
                 "default_profile": "ollama",
                 "profiles": {"ollama": {"model": "ollama/llama3.2:3b"}},
             }
-        with open(self.config_path) as f:
-            return yaml.safe_load(f) or {}
+        return load_yaml(self.config_path)
 
     # -- profile resolution -------------------------------------------------
 

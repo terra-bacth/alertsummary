@@ -1,11 +1,22 @@
+{{- if ne (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 1: the case store and checkpointer are SQLite on a RWO volume and the event bus is in-process" }}
+{{- end }}
+{{- $fullname := include "tsagent.fullname" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "tsagent.fullname" . }}
+  name: {{ $fullname }}
   labels:
     {{- include "tsagent.labels" . | nindent 4 }}
+  {{- $annotations := dict }}
+  {{- if and .Values.build.enabled .Values.build.autoDeploy }}
+  {{- $trigger := list (dict "from" (dict "kind" "ImageStreamTag" "name" (printf "%s:%s" (include "tsagent.imageStreamName" .) .Values.build.outputTag)) "fieldPath" "spec.template.spec.containers[?(@.name==\"tsagent\")].image") }}
+  {{- $_ := set $annotations "image.openshift.io/triggers" ($trigger | toJson) }}
+  {{- end }}
+  {{- include "tsagent.annotations" (dict "root" . "extra" $annotations) }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: 1
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
   strategy:
     # SQLite on a RWO volume cannot be held by two pods at once, so the old pod must release the
     # mount before the new one starts.
@@ -17,36 +28,96 @@ spec:
     metadata:
       labels:
         {{- include "tsagent.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         # Restart the pod when config changes, otherwise a ConfigMap edit is silently ignored
         # until something else triggers a rollout.
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/env: {{ include (print $.Template.BasePath "/configmap-env.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     spec:
+      serviceAccountName: {{ include "tsagent.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.extraInitContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: tsagent
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "tsagent.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.containerPort }}
               protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ $fullname }}-env
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           env:
+            # Managed by the chart so they always match the mounts below.
             - name: TSAGENT_CONFIG_DIR
               value: /etc/tsagent/config
             - name: TSAGENT_DB_PATH
               value: /opt/app-root/data/cases.db
             - name: TSAGENT_CHECKPOINT_PATH
               value: /opt/app-root/data/checkpoints.db
-            {{- range $key, $_ := .Values.secrets.apiKeys }}
+            - name: TSAGENT_PORT
+              value: {{ .Values.containerPort | quote }}
+            {{- if include "tsagent.verifyHostKeys" . }}
+            - name: TSAGENT_SSH__KNOWN_HOSTS
+              value: /etc/tsagent/ssh/known_hosts
+            {{- end }}
+            {{- if .Values.tls.serviceServingCert.enabled }}
+            - name: TSAGENT_SSL_CERTFILE
+              value: /etc/tsagent/tls/tls.crt
+            - name: TSAGENT_SSL_KEYFILE
+              value: /etc/tsagent/tls/tls.key
+            {{- end }}
+            {{- if .Values.trustedCABundle.enabled }}
+            # httpx (Prometheus, webhooks) and LiteLLM honour these instead of certifi's bundle.
+            - name: SSL_CERT_FILE
+              value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+            - name: REQUESTS_CA_BUNDLE
+              value: /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+            {{- end }}
+            {{- range $key, $_ := (include "tsagent.secretEnv" . | fromYaml) }}
             - name: {{ $key }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "tsagent.secretName" $ }}
                   key: {{ $key }}
+                  optional: true
             {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
@@ -69,55 +140,98 @@ spec:
             - name: knowledge
               mountPath: /etc/tsagent/config/metrics
               readOnly: true
-            - name: ssh-key
+            - name: ssh
               mountPath: /etc/tsagent/ssh
               readOnly: true
+            {{- if .Values.tls.serviceServingCert.enabled }}
+            - name: tls
+              mountPath: /etc/tsagent/tls
+              readOnly: true
+            {{- end }}
+            {{- if .Values.trustedCABundle.enabled }}
+            - name: trusted-ca
+              mountPath: /etc/pki/ca-trust/extracted/pem
+              readOnly: true
+            {{- end }}
             - name: data
               mountPath: /opt/app-root/data
             # readOnlyRootFilesystem is on, so anything that writes needs an explicit volume.
             - name: tmp
               mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- include "tsagent.probe" (dict "probe" . "root" $) | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            initialDelaySeconds: 10
-            periodSeconds: 20
+            {{- include "tsagent.probe" (dict "probe" . "root" $) | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
           readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
+            {{- include "tsagent.probe" (dict "probe" . "root" $) | nindent 12 }}
+          {{- end }}
+          {{- with .Values.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- with .Values.sidecars }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       volumes:
         - name: config
           configMap:
-            name: {{ include "tsagent.fullname" . }}-config
+            name: {{ include "tsagent.configMapName" . }}
         - name: allowlist
           configMap:
-            name: {{ include "tsagent.fullname" . }}-allowlist
+            name: {{ include "tsagent.allowlistConfigMapName" . }}
         - name: runbooks
           configMap:
-            name: {{ include "tsagent.fullname" . }}-runbooks
-        - name: ssh-key
+            name: {{ include "tsagent.runbooksConfigMapName" . }}
+        - name: knowledge
+          configMap:
+            name: {{ include "tsagent.knowledgeConfigMapName" . }}
+        - name: ssh
           secret:
             secretName: {{ include "tsagent.secretName" . }}
+            # Missing keys are tolerated: no key means metrics-only investigations.
             optional: true
             items:
               - key: sshPrivateKey
                 path: id_ed25519
                 mode: 0400
+              - key: sshKnownHosts
+                path: known_hosts
+                mode: 0444
+        {{- if .Values.tls.serviceServingCert.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ $fullname }}-tls
+        {{- end }}
+        {{- if .Values.trustedCABundle.enabled }}
+        - name: trusted-ca
+          configMap:
+            name: {{ $fullname }}-trusted-ca
+            items:
+              - key: ca-bundle.crt
+                path: tls-ca-bundle.pem
+        {{- end }}
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:
-            claimName: {{ include "tsagent.fullname" . }}-data
+            claimName: {{ default (printf "%s-data" $fullname) .Values.persistence.existingClaim }}
           {{- else }}
           emptyDir: {}
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -128,5 +242,9 @@ spec:
       {{- end }}
       {{- with .Values.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

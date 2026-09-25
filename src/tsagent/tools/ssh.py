@@ -20,7 +20,7 @@ from typing import ClassVar
 
 import yaml
 
-from tsagent.config import DirectorConfig
+from tsagent.config import DirectorConfig, SSHConfig
 
 logger = logging.getLogger(__name__)
 
@@ -153,11 +153,10 @@ def _parse_inventory(stdout: str) -> dict[str, str]:
             if isinstance(ip_data, dict):
                 for net, addrs in ip_data.items():
                     if "ctlplane" in net.lower() and isinstance(addrs, list):
-                        for a in adrs:
-                            if isinstance(a, str):
-                                if _IPV4.fullmatch(a) or _IPV6.fullmatch(a):
-                                    address = a
-                                    break
+                        for a in addrs:
+                            if isinstance(a, str) and (_IPV4.fullmatch(a) or _IPV6.fullmatch(a)):
+                                address = a
+                                break
                         if address:
                             break
         if address:
@@ -301,10 +300,17 @@ class AllowList:
 class SSHExecutor:
     """Runs allow-listed commands on a cluster's director and its overcloud nodes."""
 
-    def __init__(self, director: DirectorConfig, allowlist: AllowList, password: str | None = None):
+    def __init__(
+        self,
+        director: DirectorConfig,
+        allowlist: AllowList,
+        password: str | None = None,
+        ssh_config: SSHConfig | None = None,
+    ):
         self.director = director
         self.allowlist = allowlist
         self.password = password
+        self.ssh_config = ssh_config or SSHConfig()
         self._inventory: dict[str, str] | None = None  # node name -> ctlplane ip
         self._version: str | None = None  # RHOSP major version, detected once
 
@@ -313,12 +319,22 @@ class SSHExecutor:
     async def _connect(self):
         import asyncssh
 
+        cfg = self.ssh_config
+        known_hosts = self.director.known_hosts or cfg.known_hosts
+        if not known_hosts:
+            logger.warning(
+                "host key of director %s is not verified; set ssh.known_hosts (or the "
+                "director's known_hosts) to a mounted known_hosts file", self.director.host,
+            )
         kwargs: dict = {
             "host": self.director.host,
             "port": self.director.port,
             "username": self.director.user,
-            "known_hosts": None,  # lab POC; pin a known_hosts file before production use
+            "known_hosts": known_hosts or None,
+            "connect_timeout": cfg.connect_timeout_seconds,
         }
+        if cfg.keepalive_interval_seconds:
+            kwargs["keepalive_interval"] = cfg.keepalive_interval_seconds
         if self.director.auth == "password":
             if not self.password:
                 raise RuntimeError(
@@ -335,7 +351,9 @@ class SSHExecutor:
     async def _run_raw(self, command: str, target: str) -> CommandResult:
         try:
             async with await self._connect() as conn:
-                result = await conn.run(command, check=False, timeout=120)
+                result = await conn.run(
+                    command, check=False, timeout=self.ssh_config.command_timeout_seconds
+                )
         except Exception as exc:  # noqa: BLE001 - asyncssh raises a wide family of errors
             logger.warning("ssh to %s failed: %s", self.director.host, exc)
             return CommandResult(command=command, target=target, ok=False, stderr=str(exc))

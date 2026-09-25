@@ -51,8 +51,10 @@ python3.11 -m venv .venv && source .venv/bin/activate
 unset PYTHONPATH
 pip install -e ".[agents,dev]"
 pytest
-uvicorn tsagent.main:app --reload --port 8080
+uvicorn tsagent.main:app --reload --port 8080   # or: python -m tsagent  (what the container runs)
 ```
+
+Local settings go in `.env` (see [`.env.example`](.env.example)).
 
 ## API
 
@@ -77,20 +79,35 @@ uvicorn tsagent.main:app --reload --port 8080
 
 ## Configuration
 
+Nothing environment-specific is hard-coded: endpoints, credentials, timeouts, budgets, logging and
+server options all come from files, env vars or Secrets. The full reference is in
+[`deploy/README.md`](deploy/README.md#configuration-reference).
+
 | File | What it controls |
 |---|---|
-| `config/settings.yaml` | Correlation window, reflection budget, investigation limits |
+| `config/settings.yaml` | Correlation window, reflection budget, investigation limits, report/prompt budget, SSH timeouts + known_hosts, event buffers, shutdown grace, demo toggle |
 | `config/llm.yaml` | Provider profiles, per-agent model selection, fallback chain |
 | `config/clusters.yaml` | Cluster → Prometheus + director inventory |
 | `config/ssh_allowlist.yaml` | The commands the Node Agent may run |
 | `config/runbooks/*.yaml` | Per-alarm hints fed to the planner |
+| `TSAGENT_*` env vars | Server (host, port, TLS, root path, CORS), logging (level, `json`), paths, UI |
 
-Every setting is overridable by environment variable using `TSAGENT_` and `__` for nesting, so a running pod can be nudged without editing a ConfigMap:
+Every `settings.yaml` value can be overridden by an environment variable using the `TSAGENT_` prefix and `__` for nesting, so you can adjust a running pod without editing a ConfigMap:
 
 ```bash
 TSAGENT_CORRELATION__WINDOW_SECONDS=60
 TSAGENT_REFLECTION__ENABLED=false
+TSAGENT_DEMO__ENABLED=false
 TSAGENT_LLM_PROFILE=anthropic
+```
+
+Strings in `settings.yaml`, `clusters.yaml` and `llm.yaml` may reference the environment. That
+means URLs, hosts and tokens can come from a ConfigMap or Secret instead of being written into
+the file:
+
+```yaml
+url: "${PROMETHEUS_URL:-https://prometheus-default.service-telemetry.svc:9092}"
+api_base: "${QWEN_API_BASE}"
 ```
 
 ### Switching LLM provider
@@ -135,25 +152,33 @@ ruff check src tests
 
 ## Deploying to OpenShift
 
+Full guide: **[`deploy/README.md`](deploy/README.md)**. It covers in-cluster builds,
+Secrets, Helm and Kustomize, TLS, proxies and CAs, NetworkPolicy, AlertManager wiring,
+the configuration reference and troubleshooting.
+
 ```bash
-podman build -t tsagent:0.1.0 .
-helm upgrade --install tsagent deploy/helm/tsagent \
-  -f deploy/helm/tsagent/values-vllm.yaml \
-  --namespace tsagent --create-namespace
+oc new-project tsagent
+oc create secret generic tsagent-secrets \
+  --from-file=sshPrivateKey=$HOME/.ssh/tsagent_ed25519 --from-file=sshKnownHosts=./known_hosts
+
+# Helm: build the image in-cluster and deploy (dashboard + API on one Route)
+helm upgrade --install tsagent deploy/helm/tsagent -n tsagent \
+  --set build.enabled=true --set secrets.existingSecret=tsagent-secrets
+oc start-build tsagent-tsagent -n tsagent --follow
+
+# Production hardening + an LLM preset
+helm upgrade --install tsagent deploy/helm/tsagent -n tsagent \
+  -f deploy/helm/tsagent/values-openshift-prod.yaml -f deploy/helm/tsagent/values-vllm.yaml
+
+# No Helm? Kustomize, with ConfigMaps generated straight from config/
+oc kustomize --load-restrictor LoadRestrictionsNone deploy/openshift/overlays/lab | oc apply -f -
 ```
 
-Presets: `values-vllm.yaml` (in-cluster vLLM), `values-ollama.yaml` (Ollama), `values-public-llm.yaml` (Gemini/OpenAI/Anthropic). Raw manifests for Helm-less clusters are in `deploy/openshift/`.
+LLM presets: `values-vllm.yaml` (in-cluster vLLM), `values-ollama.yaml` (Ollama), `values-public-llm.yaml` (Gemini/OpenAI/Anthropic).
 
-The chart ships one replica by design — the case store and checkpointer are SQLite on a RWO volume. Scaling out needs the queue + PostgreSQL step from the plan, not a bigger replica count.
+The chart's defaults are the files in `config/`. After editing them, run
+`scripts/sync-chart-config.sh`; the tests fail if the chart copy drifts.
 
-Point AlertManager at the service:
+One replica, by design: the case store and checkpointer are SQLite on a RWO volume. Scaling out needs the queue + PostgreSQL step from the plan, not a bigger replica count.
 
-```yaml
-receivers:
-  - name: tsagent
-    webhook_configs:
-      - url: http://tsagent.tsagent.svc:8080/alerts
-        send_resolved: true
-```
-
-SSH keys and API keys come from a Secret. Prefer creating it out of band and setting `secrets.existingSecret` rather than putting keys in a values file.
+SSH keys and API keys come from a Secret. Create it out of band and set `secrets.existingSecret`; don't put keys in a values file or in `config/`.

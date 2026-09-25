@@ -248,7 +248,7 @@ async def node_investigate_node(state: IncidentState, deps: GraphDeps) -> dict:
                 "kind": "node_cmd",
                 "goal": proposal.rationale,
                 "request": f"{target}: {proposal.command}",
-                "result": result.summarize(),
+                "result": result.summarize(deps.app_config.ssh.output_max_chars),
                 "ok": result.ok,
             }
             if result.ok:

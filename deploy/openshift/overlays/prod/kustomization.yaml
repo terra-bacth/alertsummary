@@ -1,0 +1,36 @@
+# Production: hardened process settings, HTTPS to the pod, cluster CA trust.
+#   oc kustomize --load-restrictor LoadRestrictionsNone deploy/openshift/overlays/prod | oc apply -f -
+#
+# Uses a pre-built image; swap `images:` for your registry, or add ../../components/build.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tsagent
+
+resources:
+  - ../../base
+
+components:
+  - ../../components/service-tls
+  - ../../components/trusted-ca
+
+images:
+  - name: tsagent
+    newName: image-registry.openshift-image-registry.svc:5000/tsagent/tsagent
+    newTag: "0.1.0"
+
+configMapGenerator:
+  # Merged over base/env.properties.
+  - name: tsagent-env
+    behavior: merge
+    envs:
+      - env.properties
+
+patches:
+  - target:
+      kind: PersistentVolumeClaim
+      name: tsagent-data
+    patch: |-
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 10Gi

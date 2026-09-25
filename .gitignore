@@ -10,3 +10,14 @@ venv/
 .env
 .DS_Store
 data/
+
+# Credentials — provide them through an OpenShift Secret instead (see deploy/README.md).
+config/id_*
+config/*_ed25519
+config/*_rsa
+config/*_ecdsa
+*.pem
+*.key
+**/secrets*.yaml
+values-*.local.yaml
+deploy/openshift/overlays/*/secrets/

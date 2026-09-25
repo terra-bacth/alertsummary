@@ -1,0 +1,71 @@
+# HTTPS end to end: OpenShift's service CA issues a certificate for the Service, the app serves
+# it (TSAGENT_SSL_*), probes switch to HTTPS and the Route re-encrypts.
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+patches:
+  - target:
+      kind: Service
+      name: tsagent
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          service.beta.openshift.io/serving-cert-secret-name: tsagent-tls
+  - target:
+      kind: Route
+      name: tsagent
+    patch: |-
+      - op: replace
+        path: /spec/tls/termination
+        value: reencrypt
+  - target:
+      kind: Deployment
+      name: tsagent
+    patch: |-
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: tls
+          secret:
+            secretName: tsagent-tls
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: tls
+          mountPath: /etc/tsagent/tls
+          readOnly: true
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: TSAGENT_SSL_CERTFILE, value: /etc/tsagent/tls/tls.crt}
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: {name: TSAGENT_SSL_KEYFILE, value: /etc/tsagent/tls/tls.key}
+      - op: add
+        path: /spec/template/spec/containers/0/startupProbe/httpGet/scheme
+        value: HTTPS
+      - op: add
+        path: /spec/template/spec/containers/0/livenessProbe/httpGet/scheme
+        value: HTTPS
+      - op: add
+        path: /spec/template/spec/containers/0/readinessProbe/httpGet/scheme
+        value: HTTPS
+  - target:
+      kind: ServiceMonitor
+      name: tsagent
+    patch: |-
+      - op: add
+        path: /spec/endpoints/0/scheme
+        value: https
+      - op: add
+        path: /spec/endpoints/0/tlsConfig
+        value:
+          # <service>.<namespace>.svc — change the namespace part if you deploy elsewhere.
+          serverName: tsagent.tsagent.svc
+          ca:
+            configMap:
+              name: tsagent-service-ca
+              key: service-ca.crt
+
+resources:
+  - service-ca.yaml

@@ -56,6 +56,12 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
     node_evidence = state.get("node_evidence") or []
     plan = state.get("plan") or {}
     caveats = list(state.get("caveats") or [])
+    report_cfg = deps.app_config.report
+    budget = {
+        "limit": report_cfg.evidence_items,
+        "max_chars": report_cfg.evidence_max_chars,
+        "result_chars": report_cfg.evidence_result_chars,
+    }
 
     messages = [
         {"role": "system", "content": SYSTEM},
@@ -68,8 +74,8 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
                 # window, and a podman ps / pcs status dump across retries easily
                 # exceeds it, failing the whole report step. max_chars here is the
                 # hard TOTAL budget for each digest; result_chars caps each result.
-                f"Metric evidence:\n{evidence_digest(promql_evidence, limit=6, max_chars=1500, result_chars=250)}\n\n"
-                f"Node evidence:\n{evidence_digest(node_evidence, limit=6, max_chars=1500, result_chars=250)}\n\n"
+                f"Metric evidence:\n{evidence_digest(promql_evidence, **budget)}\n\n"
+                f"Node evidence:\n{evidence_digest(node_evidence, **budget)}\n\n"
                 'Reply with JSON only: {"root_cause": "...", "confidence": 0.0, '
                 '"recommendations": ["..."], "caveats": ["..."], "timeline": ["..."]}'
             ),
@@ -77,7 +83,9 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
     ]
 
     try:
-        rca = await deps.gateway.complete_json("report", messages, RCA, max_tokens=900)
+        rca = await deps.gateway.complete_json(
+            "report", messages, RCA, max_tokens=report_cfg.max_tokens
+        )
     except LLMError as exc:
         logger.error("RCA generation failed: %s", exc)
         await emit(
@@ -157,7 +165,12 @@ async def report_node(state: IncidentState, deps: GraphDeps) -> dict:
             stored.summary = stored.summary or incident.get("summary", "")
             await deps.repo.save_incident(stored)
 
-    await notify_report(deps.app_config.report.notify_webhook, report)
+    await notify_report(
+        report_cfg.notify_webhook,
+        report,
+        timeout_seconds=report_cfg.notify_timeout_seconds,
+        token_env=report_cfg.notify_token_env,
+    )
 
     logger.info(
         "report ready: incident=%s confidence=%.2f recommendations=%d",

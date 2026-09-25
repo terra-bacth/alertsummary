@@ -7,6 +7,7 @@ notification failure is a logged warning, never a failed investigation.
 from __future__ import annotations
 
 import logging
+import os
 
 import httpx
 
@@ -15,7 +16,12 @@ from tsagent.models import Report
 logger = logging.getLogger(__name__)
 
 
-async def notify_report(webhook_url: str, report: Report, timeout_seconds: int = 15) -> bool:
+async def notify_report(
+    webhook_url: str,
+    report: Report,
+    timeout_seconds: float = 15,
+    token_env: str = "",
+) -> bool:
     """POST a compact report summary to ``webhook_url``. Returns whether it was delivered."""
     if not webhook_url:
         return False
@@ -28,9 +34,13 @@ async def notify_report(webhook_url: str, report: Report, timeout_seconds: int =
         "caveats": report.caveats,
         "markdown": report.markdown,
     }
+    headers: dict[str, str] = {}
+    token = os.environ.get(token_env, "") if token_env else ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.post(webhook_url, json=payload)
+            response = await client.post(webhook_url, json=payload, headers=headers)
         if response.status_code >= 400:
             logger.warning(
                 "report notification rejected: %s returned %s", webhook_url, response.status_code

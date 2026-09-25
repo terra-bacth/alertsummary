@@ -51,6 +51,12 @@ receivers:
 
 ## Pointing at your OpenShift deployment
 
+The container image builds this dashboard and the API pod serves it at `/` on the same Route
+(`TSAGENT_UI_DIR`), so a deployed tsagent needs no separate UI hosting. Open
+`https://<route-host>/`.
+
+To develop the UI against a deployed backend instead:
+
 1. Rebuild and redeploy the tsagent pod — the event layer ships inside it, no new Service is
    needed. The existing Route already exposes the API.
 2. Run the dashboard against that Route:

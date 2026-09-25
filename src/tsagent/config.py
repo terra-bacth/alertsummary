@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -13,6 +16,62 @@ from pydantic_settings import (
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# YAML loading with ${ENV} placeholders
+# ---------------------------------------------------------------------------
+
+# ${NAME}, ${NAME:-default} (default when unset OR empty), ${NAME-default} (default when unset).
+# $${...} is an escape for a literal "${...}". Only this braced form is recognised, so PromQL's
+# "$1" capture references and regex "$" anchors pass through untouched.
+_ENV_REF = re.compile(r"\$(\$?)\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
+
+
+def expand_env(value: Any) -> Any:
+    """Recursively substitute ``${VAR}`` placeholders in every string of a parsed YAML tree.
+
+    Substitution happens *after* parsing, on string values only, so an environment variable can
+    never inject YAML structure (a key, a list, an anchor) — it can only ever be a scalar.
+    """
+    if isinstance(value, dict):
+        return {k: expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [expand_env(v) for v in value]
+    if not isinstance(value, str) or "${" not in value:
+        return value
+
+    def substitute(match: re.Match) -> str:
+        escaped, name, operator, default = match.groups()
+        if escaped:
+            return match.group(0)[1:]  # "$${X}" -> literal "${X}"
+        current = os.environ.get(name)
+        if operator == ":-" and not current:
+            return default or ""
+        if operator == "-" and current is None:
+            return default or ""
+        if current is None:
+            logger.warning("config references ${%s}, which is not set; using an empty string", name)
+            return ""
+        return current
+
+    return _ENV_REF.sub(substitute, value)
+
+
+def load_yaml(path: Path | str, *, expand: bool = True) -> dict[str, Any]:
+    """Load a YAML mapping, expanding ``${ENV}`` placeholders unless ``expand`` is False.
+
+    The SSH allow-list is loaded with ``expand=False``: it is the security boundary for node
+    access, so nothing outside the reviewed file may alter it.
+    """
+    path = Path(path)
+    with open(path) as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise TypeError(f"{path} must contain a YAML mapping at the top level")
+    return expand_env(data) if expand else data
+
 
 # ---------------------------------------------------------------------------
 # Cluster inventory (config/clusters.yaml)
@@ -39,6 +98,9 @@ class DirectorConfig(BaseModel):
     # Static hostname -> ctlplane IP map. Set this when neither metalsmith nor Nova on the
     # undercloud reports the hostnames your alarms carry; it short-circuits inventory discovery.
     nodes: dict[str, str] = Field(default_factory=dict)
+    # known_hosts file used to verify this director's host key. Empty falls back to
+    # ssh.known_hosts in settings.yaml; if that is empty too, host keys are not verified.
+    known_hosts: str = ""
 
 
 class PrometheusInstance(BaseModel):
@@ -154,6 +216,59 @@ class InvestigationConfig(BaseModel):
 
 class ReportConfig(BaseModel):
     notify_webhook: str = ""
+    notify_timeout_seconds: float = 15
+    # Env var holding a bearer token sent with the notification, for webhooks that need auth.
+    notify_token_env: str = ""
+    # Budget for the RCA prompt. The defaults fit an 8B model with a 4096-token context; raise
+    # them when the report agent runs on a larger-context model.
+    max_tokens: int = 900
+    evidence_items: int = 6
+    evidence_max_chars: int = 1500
+    evidence_result_chars: int = 250
+
+
+class SSHConfig(BaseModel):
+    connect_timeout_seconds: float = 30
+    # Upper bound for a single command on the director / overcloud hop.
+    command_timeout_seconds: float = 120
+    # 0 disables SSH keepalives.
+    keepalive_interval_seconds: float = 0
+    # Default known_hosts for every director (a director's own known_hosts wins). Empty
+    # disables host-key verification, which is logged as a warning at every connection.
+    known_hosts: str = ""
+    # Command output is trimmed to this many characters before it reaches a prompt.
+    output_max_chars: int = 1500
+
+
+class EventsConfig(BaseModel):
+    # In-memory ring buffer (and number of events replayed from the store on start).
+    buffer_size: int = 4000
+    # Per-SSE-client queue; a slow client loses its oldest events beyond this.
+    subscriber_queue_size: int = 512
+    # Events sent to a freshly connected dashboard before live streaming begins.
+    stream_replay: int = 200
+
+
+class OrchestratorConfig(BaseModel):
+    # On shutdown, running investigations get this long to finish before being cancelled (they
+    # resume from their checkpoint on the next start). Keep it below the pod's
+    # terminationGracePeriodSeconds.
+    shutdown_grace_seconds: float = 5
+    # Re-run incidents left unfinished by a previous pod on startup.
+    resume_on_start: bool = True
+
+
+class DemoConfig(BaseModel):
+    # POST /api/demo writes a scripted incident into the real case store. Turn it off in
+    # production so the dashboard only ever shows genuine incidents.
+    enabled: bool = True
+    step_pause_seconds: float = 1.1
+
+
+class ApiConfig(BaseModel):
+    # How much the dashboard's /api/overview call returns.
+    overview_incidents: int = 100
+    overview_alarms: int = 200
 
 
 class _YamlSettingsSource(PydanticBaseSettingsSource):
@@ -166,21 +281,25 @@ class _YamlSettingsSource(PydanticBaseSettingsSource):
         path = get_settings().config_dir / "settings.yaml"
         if not path.exists():
             return {}
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
+        return load_yaml(path)
 
 
 class AppConfig(BaseSettings):
     """Runtime tunables. Env wins over settings.yaml: TSAGENT_CORRELATION__WINDOW_SECONDS=60."""
 
     model_config = SettingsConfigDict(
-        env_prefix="TSAGENT_", env_nested_delimiter="__", extra="ignore"
+        env_prefix="TSAGENT_", env_nested_delimiter="__", env_file=".env", extra="ignore"
     )
 
     correlation: CorrelationConfig = Field(default_factory=CorrelationConfig)
     reflection: ReflectionConfig = Field(default_factory=ReflectionConfig)
     investigation: InvestigationConfig = Field(default_factory=InvestigationConfig)
     report: ReportConfig = Field(default_factory=ReportConfig)
+    ssh: SSHConfig = Field(default_factory=SSHConfig)
+    events: EventsConfig = Field(default_factory=EventsConfig)
+    orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
+    demo: DemoConfig = Field(default_factory=DemoConfig)
+    api: ApiConfig = Field(default_factory=ApiConfig)
 
     @classmethod
     def settings_customise_sources(
@@ -206,19 +325,54 @@ class AppConfig(BaseSettings):
 
 
 class Settings(BaseSettings):
+    """Process-level settings, from TSAGENT_* env vars (or a local .env file).
+
+    These decide where things live and how the process is served, so they are needed before any
+    config file is read — which is why they are env-only rather than part of settings.yaml.
+    """
+
     model_config = SettingsConfigDict(env_prefix="TSAGENT_", env_file=".env", extra="ignore")
 
+    # -- paths --
     config_dir: Path = Path("config")
     db_path: Path = Path("data/cases.db")
     checkpoint_path: Path = Path("data/checkpoints.db")
+    # Built dashboard (web/dist). Empty disables serving the UI from the API process.
+    ui_dir: str = ""
+
+    # -- HTTP server --
+    host: str = "::"  # dual-stack; use 0.0.0.0 where the pod has no IPv6
+    port: int = 8080
+    # Path prefix when the Route exposes the app under one (route.path). The router forwards the
+    # prefix unchanged; requests with and without it are both served, so probes need no change.
+    root_path: str = ""
+    proxy_headers: bool = True  # trust X-Forwarded-* from the OpenShift router
+    forwarded_allow_ips: str = "*"
+    timeout_keep_alive: int = 5
+    timeout_graceful_shutdown: int = 20
+    # Serve HTTPS directly (e.g. an OpenShift service-serving certificate for a reencrypt
+    # Route). Both empty means plain HTTP.
+    ssl_certfile: str = ""
+    ssl_keyfile: str = ""
+    # Comma-separated. "*" is fine when the UI is served same-origin by this process.
+    cors_origins: str = "*"
+    metrics_enabled: bool = True
+
+    # -- logging --
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+    access_log: bool = True
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()] or ["*"]
 
     def load_inventory(self) -> ClusterInventory:
         path = self.config_dir / "clusters.yaml"
         if not path.exists():
+            logger.warning("%s missing — no clusters configured", path)
             return ClusterInventory()
-        with open(path) as f:
-            data = yaml.safe_load(f) or {}
-        return ClusterInventory.model_validate(data)
+        return ClusterInventory.model_validate(load_yaml(path))
 
     def load_app_config(self) -> AppConfig:
         return AppConfig()

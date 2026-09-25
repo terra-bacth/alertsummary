@@ -114,7 +114,10 @@ export interface Report {
 export function apiBase(): string {
   // Allow a remote backend override (a deployed OpenShift Route); fall back to same-origin.
   const env = (import.meta.env.VITE_TSAGENT_API as string | undefined) ?? '';
-  return env.replace(/\/$/, '');
+  if (env) return env.replace(/\/$/, '');
+  // Same-origin: the API lives next to wherever index.html was served from, so a Route with a
+  // path prefix ("/tsagent/") keeps working with no rebuild. "/" -> "", "/tsagent/" -> "/tsagent".
+  return window.location.pathname.replace(/\/[^/]*$/, '');
 }
 
 export async function getJSON<T>(path: string): Promise<T> {

@@ -24,3 +24,51 @@ investigation:
 report:
   # POST the rendered report here when an incident closes. Empty disables notification.
   notify_webhook: ""
+  notify_timeout_seconds: 15
+  # Env var holding a bearer token for the webhook (e.g. from the tsagent Secret). Empty: no auth.
+  notify_token_env: ""
+  # RCA prompt budget. Sized for an 8B model with a 4096-token context; raise these when the
+  # report agent runs on a larger-context model.
+  max_tokens: 900
+  evidence_items: 6
+  evidence_max_chars: 1500
+  evidence_result_chars: 250
+
+ssh:
+  connect_timeout_seconds: 30
+  command_timeout_seconds: 120
+  keepalive_interval_seconds: 0
+  # known_hosts used to verify every director's host key (a director's own `known_hosts` in
+  # clusters.yaml wins). On OpenShift the chart mounts the Secret key sshKnownHosts here.
+  # Empty disables host-key verification and logs a warning on every connection.
+  known_hosts: ""
+  # Command output is trimmed to this many characters before it reaches a prompt.
+  output_max_chars: 1500
+
+events:
+  # Dashboard event history held in memory (and replayed from the case store on restart).
+  buffer_size: 4000
+  # Per-browser SSE queue; a slow client drops its oldest events beyond this.
+  subscriber_queue_size: 512
+  # Events sent to a freshly opened dashboard before live streaming starts.
+  stream_replay: 200
+
+orchestrator:
+  # On pod shutdown, running investigations get this long before being cancelled (they resume
+  # from their checkpoint on the next start). Keep below terminationGracePeriodSeconds.
+  shutdown_grace_seconds: 5
+  resume_on_start: true
+
+demo:
+  # POST /api/demo writes a scripted incident into the real case store. Disable in production.
+  enabled: true
+  step_pause_seconds: 1.1
+
+api:
+  # Size of the dashboard's /api/overview response.
+  overview_incidents: 100
+  overview_alarms: 200
+
+# Any string in this file, clusters.yaml or llm.yaml may use ${ENV_VAR}, ${ENV_VAR:-default}
+# (default when unset or empty) or ${ENV_VAR-default} (default when unset); $${...} is a literal.
+# Precedence for this file: TSAGENT_<SECTION>__<KEY> env var > settings.yaml > built-in default.

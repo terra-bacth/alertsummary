@@ -20,6 +20,18 @@ from tsagent.tools.ssh import AllowList
 CHART_DIR = CONFIG_DIR.parent / "deploy" / "helm" / "tsagent"
 
 
+def _chart_llm(values_file: str) -> dict:
+    """The llm.yaml a values file actually deploys.
+
+    An empty ``llm:`` means "use the chart's copy of config/llm.yaml" — the same rule as the
+    tsagent.llmYaml helper in templates/_helpers.tpl.
+    """
+    values = yaml.safe_load((CHART_DIR / values_file).read_text()) or {}
+    return values.get("llm") or yaml.safe_load(
+        (CHART_DIR / "files" / "config" / "llm.yaml").read_text()
+    )
+
+
 # -- shipped config loads ---------------------------------------------------
 
 
@@ -146,9 +158,36 @@ def test_chart_ships_the_same_runbooks_as_the_repo():
         assert source.read_text() == shipped.read_text()
 
 
+@pytest.mark.parametrize(
+    "relative",
+    ["config/settings.yaml", "config/llm.yaml", "config/clusters.yaml", "promql_library.yaml"],
+)
+def test_chart_ships_the_same_config_as_the_repo(relative):
+    """The chart's defaults are copies of config/; run scripts/sync-chart-config.sh after edits."""
+    source = CONFIG_DIR / relative.removeprefix("config/")
+    shipped = CHART_DIR / "files" / relative
+    assert shipped.exists(), f"{relative} is missing from the chart"
+    assert source.read_text() == shipped.read_text(), (
+        f"deploy/helm/tsagent/files/{relative} is out of date; run scripts/sync-chart-config.sh"
+    )
+
+
+def test_chart_ships_every_metric_catalogue():
+    for source in (CONFIG_DIR / "metrics").glob("*.txt"):
+        shipped = CHART_DIR / "files" / "metrics" / source.name
+        assert shipped.exists() and shipped.read_text() == source.read_text(), (
+            f"metrics/{source.name} is missing or stale in the chart"
+        )
+
+
+def test_no_private_key_is_ever_copied_into_the_chart():
+    for path in (CHART_DIR / "files").rglob("*"):
+        if path.is_file():
+            assert "PRIVATE KEY" not in path.read_text(errors="ignore"), path
+
+
 def test_chart_values_reference_only_defined_llm_profiles():
-    values = yaml.safe_load((CHART_DIR / "values.yaml").read_text())
-    llm = values["llm"]
+    llm = _chart_llm("values.yaml")
     assert llm["default_profile"] in llm["profiles"]
     for profile in llm.get("per_agent_overrides", {}).values():
         assert profile in llm["profiles"]
@@ -197,8 +236,7 @@ def test_self_hosted_profiles_declare_a_structured_output_mode(source):
     vLLM implements response_format as guided decoding and some builds reject it outright, so
     leaving it implicit means the first real incident is where you find out.
     """
-    values = yaml.safe_load((CHART_DIR / source).read_text())
-    for name, profile in values["llm"]["profiles"].items():
+    for name, profile in _chart_llm(source)["profiles"].items():
         if profile.get("api_base"):
             assert profile.get("structured_output"), (
                 f"{source}: profile {name!r} has an api_base but no structured_output"
@@ -207,7 +245,7 @@ def test_self_hosted_profiles_declare_a_structured_output_mode(source):
 
 def test_shipped_llm_config_matches_the_chart_on_structured_output():
     repo = yaml.safe_load((CONFIG_DIR / "llm.yaml").read_text())["profiles"]
-    chart = yaml.safe_load((CHART_DIR / "values.yaml").read_text())["llm"]["profiles"]
+    chart = _chart_llm("values.yaml")["profiles"]
     for name, profile in chart.items():
         if name in repo:
             assert profile.get("structured_output") == repo[name].get("structured_output"), (

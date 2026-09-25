@@ -6,6 +6,9 @@ import { defineConfig } from 'vite';
 // `VITE_TSAGENT_API` (e.g. https://your-route.apps.example.com) to hit a remote Route instead.
 export default defineConfig({
   plugins: [react()],
+  // Relative asset URLs, so the built dashboard works both at a Route's root and under a path
+  // prefix (route.path + TSAGENT_ROOT_PATH) without rebuilding.
+  base: './',
   server: {
     port: 5173,
     host: true,

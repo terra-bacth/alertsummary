@@ -21,7 +21,7 @@ director:
   # RHOSP 17 removed Nova from the undercloud (provisioning moved to metalsmith with ephemeral
   # Heat), so `openstack server list` fails there with "region not found". metalsmith is the
   # RHOSP 17 source of node hostnames and ctlplane addresses; the Nova form stays for RHOSP 16.
-  - pattern: '^metalsmith list( -f (value|json|table))?$'
+  - pattern: '^metalsmith( (-f|--format) (value|json|table))? list( (-f|--format) (value|json|table))?$'
     description: overcloud nodes and their ctlplane addresses (RHOSP 17)
   - pattern: '^metalsmith show [A-Za-z0-9._-]+( -f (value|json))?$'
     description: detail for one provisioned node (RHOSP 17)
@@ -33,6 +33,10 @@ director:
     description: heat stack status
   - pattern: '^openstack server show [A-Za-z0-9._-]+( -f (value|json|table))?$'
     description: detail for one overcloud node
+  - pattern: '^getent hosts [A-Za-z0-9._-]+(\.[A-Za-z0-9._-]+)*$'
+    description: resolve a hostname to an IP via the director's DNS (undercloud dnsmasq)
+  - pattern: '^host [A-Za-z0-9._-]+(\.[A-Za-z0-9._-]+)*$'
+    description: DNS lookup for a hostname (fallback for envs without getent)
 
 # Commands run on an overcloud node, reached via the director as heat-admin (RHOSP 16) or
 # tripleo-admin (RHOSP 16.2+/17). `sudo ` is optional on the read-only systemd and journal
@@ -43,12 +47,16 @@ overcloud:
   # than relying solely on the forbidden_sequences filter above.
   - pattern: '^df -h( (?!.*\.\.)[A-Za-z0-9._/-]+)?$'
     description: filesystem usage
+  - pattern: '^df -i( (?!.*\.\.)[A-Za-z0-9._/-]+)?$'
+    description: inode usage
   - pattern: '^free -m$'
     description: memory usage
   - pattern: '^uptime$'
     description: load average and uptime
   - pattern: '^cat /proc/loadavg$'
     description: raw load average
+  - pattern: '^cat /proc/meminfo$'
+    description: memory and hugepage details
   - pattern: '^top -bn1$'
     description: one-shot process snapshot
   - pattern: '^ps aux --sort=-%(cpu|mem)$'
@@ -67,17 +75,19 @@ overcloud:
   # -- logs --
   - pattern: '^(sudo )?journalctl -u [A-Za-z0-9@._*-]+ --no-pager -n [0-9]{1,4}$'
     description: recent unit logs
-  - pattern: '^(sudo )?journalctl --no-pager -p (err|crit|warning) -n [0-9]{1,4}$'
-    description: recent high-priority logs
-  - pattern: '^(sudo )?journalctl --no-pager --since "[0-9]{1,3} (minutes|hours) ago" -n [0-9]{1,4}$'
+  - pattern: '^(sudo )?journalctl --no-pager -p (err|crit|warning|alert|emerg)(,(err|crit|warning|alert|emerg))* -n [0-9]{1,4}$'
+    description: recent high-priority logs (single severity or comma list)
+  - pattern: '^(sudo )?journalctl --no-pager --since .+ -n [0-9]{1,4}$'
     description: logs over a recent window
   - pattern: '^sudo tail -n [0-9]{1,4} /var/log/(?!.*\.\.)(containers/)?[A-Za-z0-9._/-]+\.log$'
     description: tail a service log file
-  - pattern: '^dmesg -T --level=(err|crit|alert|emerg)(,(err|crit|alert|emerg))*$'
+  - pattern: '^(sudo )?dmesg -T --level=(err|crit|alert|emerg)(,(err|crit|alert|emerg))*$'
     description: kernel errors
   # -- RHOSP containerised services --
   - pattern: '^sudo podman ps( -a)?$'
     description: running service containers
+  - pattern: '^sudo podman ps -a --filter name=[A-Za-z0-9._-]+$'
+    description: containers matching a service name
   - pattern: '^sudo podman logs --tail [0-9]{1,4} [A-Za-z0-9._-]+$'
     description: container logs
   - pattern: '^sudo podman inspect [A-Za-z0-9._-]+$'
@@ -97,8 +107,10 @@ overcloud:
   # -- networking --
   - pattern: '^sudo ovs-vsctl show$'
     description: open vswitch bridges and ports
-  - pattern: '^ip -br (addr|link)$'
+  - pattern: '^(sudo )?ip -br (addr|link)$'
     description: interface state
+  - pattern: '^(sudo )?ip -s link$'
+    description: interface errors and drops per device
   - pattern: '^ss -tuln$'
     description: listening sockets
   - pattern: '^ping -c [0-9] [A-Za-z0-9._-]+$'

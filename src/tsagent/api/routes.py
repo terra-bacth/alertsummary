@@ -9,10 +9,16 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 
+from tsagent.config import AppConfig
 from tsagent.models import Alarm, AMWebhook, IncidentStatus
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _app_config(request: Request) -> AppConfig:
+    """The loaded tunables, or defaults when the app was assembled without a lifespan (tests)."""
+    return getattr(request.app.state, "app_config", None) or AppConfig()
 
 
 @router.get("/healthz")
@@ -141,13 +147,14 @@ async def event_stream(request: Request) -> StreamingResponse:
     """
     bus = getattr(request.app.state, "events_bus", None)
     collector = getattr(request.app.state, "events", None)
+    replay = _app_config(request).events.stream_replay
 
     async def generate():
         queue = bus.subscribe() if bus else None
         try:
             # Seed the stream with recent history so a fresh page is never empty.
             if collector is not None:
-                for event in collector.recent(limit=200):
+                for event in collector.recent(limit=replay):
                     yield _sse(event.summary_dict(), event_type=event.type, seq=event.sequence)
             yield ": connected\n\n"
             if queue is None:
@@ -214,7 +221,9 @@ async def trigger_demo(request: Request, background: bool = True) -> dict:
     """
     demo = getattr(request.app.state, "demo", None)
     if demo is None:
-        raise HTTPException(status_code=503, detail="demo driver not available")
+        raise HTTPException(
+            status_code=503, detail="demo driver not available (disabled by demo.enabled)"
+        )
     if demo._task and not demo._task.done():
         return {"started": False, "incident_id": demo.scenario_id, "running": True}
     if background:
@@ -231,8 +240,9 @@ async def overview(request: Request) -> dict:
     correlator = getattr(request.app.state, "correlator", None)
     orchestrator = getattr(request.app.state, "orchestrator", None)
 
-    incidents = await repo.list_incidents(limit=100)
-    alarms = await repo.list_alarms(limit=200)
+    limits = _app_config(request).api
+    incidents = await repo.list_incidents(limit=limits.overview_incidents)
+    alarms = await repo.list_alarms(limit=limits.overview_alarms)
     open_alarms = [a for a in alarms if a.status != "resolved"]
 
     by_status: dict[str, int] = {}

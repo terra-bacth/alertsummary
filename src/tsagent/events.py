@@ -91,12 +91,13 @@ class EventBus:
     queue rather than unbounded buffering.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, queue_size: int = 512) -> None:
         self._queues: set[asyncio.Queue] = set()
         self._closed = False
+        self.queue_size = queue_size
 
-    def subscribe(self, maxsize: int = 512) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize)
+    def subscribe(self, maxsize: int | None = None) -> asyncio.Queue:
+        queue: asyncio.Queue = asyncio.Queue(maxsize=maxsize or self.queue_size)
         self._queues.add(queue)
         return queue
 

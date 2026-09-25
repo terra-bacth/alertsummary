@@ -53,4 +53,6 @@ class GraphDeps:
         if not director:
             return None
         password = os.environ.get(director.password_env) if director.password_env else None
-        return SSHExecutor(director, self.allowlist, password=password)
+        return SSHExecutor(
+            director, self.allowlist, password=password, ssh_config=self.app_config.ssh
+        )

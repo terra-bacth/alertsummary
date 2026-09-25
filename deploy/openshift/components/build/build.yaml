@@ -1,0 +1,38 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: tsagent
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: tsagent
+spec:
+  runPolicy: Serial
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+  source:
+    type: Git
+    git:
+      uri: https://github.com/terra-bacth/alertsummary.git
+      ref: master
+    # Private repo:  oc create secret generic git-creds --type=kubernetes.io/basic-auth ...
+    # sourceSecret:
+    #   name: git-creds
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+      # Point at mirrors for a disconnected cluster (see the Dockerfile for all args).
+      buildArgs: []
+      # - name: PIP_INDEX_URL
+      #   value: https://nexus.example.com/repository/pypi/simple
+  output:
+    to:
+      kind: ImageStreamTag
+      name: tsagent:latest
+  triggers:
+    - type: ConfigChange

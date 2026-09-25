@@ -1,0 +1,14 @@
+# Lab: the repo's config/ as-is, image built in-cluster.
+#   oc new-project tsagent
+#   oc kustomize --load-restrictor LoadRestrictionsNone deploy/openshift/overlays/lab | oc apply -f -
+#   oc start-build tsagent --follow
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: tsagent
+
+resources:
+  - ../../base
+
+components:
+  - ../../components/build

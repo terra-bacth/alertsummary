@@ -1,0 +1,30 @@
+# Build the image inside OpenShift (BuildConfig + ImageStream) and roll the Deployment whenever
+# a new image is pushed. Start a build with:  oc start-build tsagent --follow
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - build.yaml
+
+# The base already rewrote "tsagent" to the internal-registry path; point it at the ImageStream
+# tag instead. The short name resolves in whatever namespace this is applied to (see the
+# resolve-names annotation below), so nothing here depends on the namespace.
+images:
+  - name: image-registry.openshift-image-registry.svc:5000/tsagent/tsagent
+    newName: tsagent
+    newTag: latest
+
+patches:
+  - target:
+      kind: Deployment
+      name: tsagent
+    patch: |-
+      - op: add
+        path: /metadata/annotations
+        value:
+          image.openshift.io/triggers: '[{"from":{"kind":"ImageStreamTag","name":"tsagent:latest"},"fieldPath":"spec.template.spec.containers[?(@.name==\"tsagent\")].image"}]'
+      - op: add
+        path: /spec/template/metadata/annotations
+        value:
+          # Lets the short "tsagent:latest" reference resolve through the ImageStream.
+          alpha.image.policy.openshift.io/resolve-names: "*"

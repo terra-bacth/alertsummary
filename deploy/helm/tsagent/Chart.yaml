@@ -2,7 +2,7 @@ apiVersion: v2
 name: tsagent
 description: Multi-agent RHOSP alarm troubleshooting system (AlertManager -> correlation -> PromQL -> node SSH -> RCA report)
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.1.0"
 keywords:
   - openstack
@@ -10,3 +10,8 @@ keywords:
   - alertmanager
   - sre
   - agents
+  - openshift
+annotations:
+  # Shown by the OpenShift console's Helm catalog.
+  charts.openshift.io/name: tsagent
+  charts.openshift.io/provider: terra-bacth

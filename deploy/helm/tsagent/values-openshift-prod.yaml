@@ -1,0 +1,67 @@
+# Production hardening for OpenShift. Layer an LLM preset and your site file on top:
+#
+#   oc create secret generic tsagent-secrets -n tsagent \
+#     --from-file=sshPrivateKey=$HOME/.ssh/tsagent_ed25519 \
+#     --from-file=sshKnownHosts=./known_hosts \
+#     --from-literal=TSAGENT_PROM_TOKEN="$(oc create token prometheus-reader -n service-telemetry)"
+#
+#   helm upgrade --install tsagent deploy/helm/tsagent -n tsagent --create-namespace \
+#     -f deploy/helm/tsagent/values-openshift-prod.yaml \
+#     -f deploy/helm/tsagent/values-vllm.yaml \
+#     -f my-site.yaml
+fullnameOverride: tsagent
+
+secrets:
+  existingSecret: tsagent-secrets
+  # The Secret above carries sshKnownHosts, so director host keys are verified.
+  verifyHostKeys: true
+
+# HTTPS all the way to the pod: service-CA certificate + reencrypt Route.
+tls:
+  serviceServingCert:
+    enabled: true
+
+# Trust the cluster-wide CA bundle (corporate proxy / internal CAs) for Prometheus, LLM
+# endpoints and webhooks.
+trustedCABundle:
+  enabled: true
+
+# Merged over values.yaml's env: only what differs is listed.
+env:
+  TSAGENT_LOG_FORMAT: json  # one JSON object per line for OpenShift Logging / Loki
+  TSAGENT_ACCESS_LOG: "false"  # probes and the dashboard poll a lot; /metrics covers traffic
+
+settings:
+  correlation:
+    window_seconds: 300
+  demo:
+    # Never mix scripted incidents into the production case store.
+    enabled: false
+  orchestrator:
+    shutdown_grace_seconds: 20
+
+# 20s uvicorn drain + 20s orchestrator grace, with headroom.
+terminationGracePeriodSeconds: 60
+
+# Let the pod's own service-account token read Prometheus (bearer_token_file in clusters.yaml).
+rbac:
+  prometheusReader:
+    enabled: true
+
+persistence:
+  size: 10Gi
+  keep: true
+
+route:
+  annotations:
+    haproxy.router.openshift.io/timeout: 1h
+    haproxy.router.openshift.io/hsts_header: max-age=31536000;includeSubDomains;preload
+    # haproxy.router.openshift.io/ip_whitelist: "10.0.0.0/8"
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 768Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi

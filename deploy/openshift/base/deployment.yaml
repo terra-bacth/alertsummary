@@ -1,0 +1,132 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tsagent
+spec:
+  # One replica only: SQLite on a RWO volume and an in-process event bus.
+  replicas: 1
+  revisionHistoryLimit: 5
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      serviceAccountName: tsagent
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tsagent
+          image: tsagent
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: tsagent-env
+            # Any secret env vars (TSAGENT_DIRECTOR_PASSWORD, TSAGENT_PROM_TOKEN, API keys...):
+            #   oc create secret generic tsagent-env-secrets --from-literal=NAME=value ...
+            - secretRef:
+                name: tsagent-env-secrets
+                optional: true
+          env:
+            - name: TSAGENT_CONFIG_DIR
+              value: /etc/tsagent/config
+            - name: TSAGENT_DB_PATH
+              value: /opt/app-root/data/cases.db
+            - name: TSAGENT_CHECKPOINT_PATH
+              value: /opt/app-root/data/checkpoints.db
+            - name: TSAGENT_PORT
+              value: "8080"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tsagent/config
+              readOnly: true
+            - name: allowlist
+              mountPath: /etc/tsagent/config/ssh_allowlist.yaml
+              subPath: ssh_allowlist.yaml
+              readOnly: true
+            - name: runbooks
+              mountPath: /etc/tsagent/config/runbooks
+              readOnly: true
+            - name: knowledge
+              mountPath: /etc/tsagent/config/promql_library.yaml
+              subPath: promql_library.yaml
+              readOnly: true
+            - name: knowledge
+              mountPath: /etc/tsagent/config/metrics
+              readOnly: true
+            - name: ssh
+              mountPath: /etc/tsagent/ssh
+              readOnly: true
+            - name: data
+              mountPath: /opt/app-root/data
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+      volumes:
+        - name: config
+          configMap:
+            name: tsagent-config
+        - name: allowlist
+          configMap:
+            name: tsagent-allowlist
+        - name: runbooks
+          configMap:
+            name: tsagent-runbooks
+        - name: knowledge
+          configMap:
+            name: tsagent-knowledge
+        # SSH material:
+        #   oc create secret generic tsagent-ssh \
+        #     --from-file=sshPrivateKey=$HOME/.ssh/tsagent_ed25519 --from-file=sshKnownHosts=./known_hosts
+        - name: ssh
+          secret:
+            secretName: tsagent-ssh
+            optional: true
+            items:
+              - key: sshPrivateKey
+                path: id_ed25519
+                mode: 0400
+              - key: sshKnownHosts
+                path: known_hosts
+                mode: 0444
+        - name: data
+          persistentVolumeClaim:
+            claimName: tsagent-data
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,65 @@
+# LLM provider profiles. Switching provider is a config change (ConfigMap / env), never code.
+#
+# Lab reality: Llama 3.2 8B Instruct + Qwen on CPU-only vLLM (~60 vCPU). CPU inference is slow,
+# so timeouts are generous, generation is capped, and temperature is low to keep structured
+# output parseable on the first attempt (a parse-retry doubles the CPU cost of a step).
+default_profile: llama-lab
+
+defaults:
+  timeout_seconds: 500
+  max_tokens: 1024
+  temperature: 0.1
+  max_attempts: 3 # attempts against one profile before moving down the fallback chain
+  retry_backoff_seconds: 2 # doubles per attempt, capped at 10s
+
+# structured_output controls how JSON is requested:
+#   response_format - the OpenAI field. vLLM implements this as guided decoding, which needs a
+#                     working backend (outlines/xgrammar); some builds reject it outright.
+#   prompt          - instruct the model instead. Always works, but a small model will produce
+#                     malformed JSON more often, and each failure costs a repair call.
+# Prefer response_format wherever the server supports it. The gateway detects a server that
+# rejects it and downgrades that profile automatically, logging a warning.
+profiles:
+  llama-lab:
+    model: "hosted_vllm/meta-llama/Llama-3.1-8B-Instruct"
+    api_base: "http://olllama-anything-llm.apps.kaizen.utd.com/v1"
+    api_key_env: "123"
+    structured_output: prompt
+  qwen-lab:
+    model: "hosted_vllm/Qwen/Qwen2.5-VL-7B-Instruct"
+    api_base: "http://qwenroute-anything-llm.apps.kaizen.utd.com/v1"
+    api_key_env: "123"
+    structured_output: prompt
+  qwen3-lab:
+    model: "hosted_vllm/Qwen/Qwen3-30B-A3B"
+    api_base: "http://qwen3route-anything-llm.apps.kaizen.utd.com/v1"
+    api_key_env: "123"
+    structured_output: prompt
+  ollama:
+    model: "ollama/llama3.2:3b"
+    api_base: "http://ollama.llm-serving.svc:11434"
+    structured_output: prompt
+  gemini:
+    model: "gemini/gemini-2.5-pro"
+    api_key_env: "GEMINI_API_KEY"
+    timeout_seconds: 120
+  openai:
+    model: "gpt-4o"
+    api_key_env: "OPENAI_API_KEY"
+    timeout_seconds: 120
+  anthropic:
+    model: "claude-sonnet-5"
+    api_key_env: "ANTHROPIC_API_KEY"
+    timeout_seconds: 120
+
+# Per-agent model selection. Qwen tends to hold structured-output format better, which matters
+# most for the planner and PromQL agents; reflection is high-volume so it stays on the 8B.
+per_agent_overrides:
+  planner: qwen3-lab
+  promql: llama-lab
+  reflection: qwen3-lab
+
+# Profiles tried in order when the resolved profile keeps failing. Left empty on purpose:
+# incident context contains node names and log excerpts, so falling back to a public provider
+# is an egress decision an operator should opt into, not a silent default.
+fallback_chain: []

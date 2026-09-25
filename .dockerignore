@@ -10,7 +10,23 @@ __pycache__/
 data/
 tests/
 deploy/
+scripts/
 *.db
 *.sqlite3
 .env
 .DS_Store
+
+# The UI is built inside the image; never ship a host build or host node_modules.
+web/node_modules/
+web/dist/
+
+# Credentials must arrive from an OpenShift Secret at runtime, never be baked into an image.
+config/*ed25519*
+config/*_rsa*
+config/*_ecdsa*
+config/id_*
+config/known_hosts
+**/*.pem
+**/*.key
+**/*.p12
+**/secrets*.yaml
