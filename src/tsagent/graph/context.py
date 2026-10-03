@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 
-def alarm_digest(alarms: list[dict[str, Any]], limit: int = 12) -> str:
+def alarm_digest(alarms: list[dict[str, Any]], limit: int = 5) -> str:
     """One line per alarm: enough to reason about, far short of the raw payload."""
     if not alarms:
         return "(no alarms)"
@@ -50,9 +50,9 @@ def metric_namespaces(alarms: list[dict[str, Any]]) -> list[str]:
 
 def evidence_digest(
     evidence: list[dict[str, Any]],
-    limit: int = 12,
-    max_chars: int = 4000,
-    result_chars: int = 400,
+    limit: int = 5,
+    max_chars: int = 800,
+    result_chars: int = 150,
 ) -> str:
     """Render collected evidence within a hard total character budget.
 

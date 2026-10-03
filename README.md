@@ -4,15 +4,17 @@ Multi-agent system that troubleshoots RHOSP alarms end-to-end:
 
 ```
 AlertManager ──webhook──► Ingest API ──► Correlation Engine ──► LangGraph Orchestrator
-                                                                 ├─ Planner Agent
-                                                                 ├─ PromQL Agent ──► Prometheus (per-cluster)
-                                                                 ├─ Decision Node
-                                                                 ├─ Node Agent ──SSH──► Director ──► Overcloud nodes
-                                                                 ├─ ↺ Reflection (self-correction)
-                                                                 └─ Report Agent ──► RCA report + recommendations
+                                                                 ├─ Nami (Planner) — charts the investigation course
+                                                                 ├─ Usopp (PromQL) ──► Prometheus (per-cluster)
+                                                                 ├─ Zoro (Decision) — metrics sufficient or node access?
+                                                                 ├─ Sanji (Node Agent) ──SSH──► Director ──► Overcloud nodes
+                                                                 ├─ ↺ Chopper (Reflection) — self-correction checkpoint
+                                                                 └─ Robin (Report) ──► RCA report + recommendations
 ```
 
 - **LLMs:** local vLLM (Llama 3.2 8B / Qwen) or public providers (Gemini/OpenAI/Anthropic) via LiteLLM — config-switchable, no code change.
+- **Agent naming:** Each agent is named after a One Piece character whose role mirrors their function — see the pipeline diagram above.
+- **Agent naming:** Each agent is named after a One Piece character whose role mirrors their function — see the pipeline diagram above.
 - **RHOSP access model:** per-cluster director node; common troubleshooting user → `stack` → `heat-admin@<node>`, with a read-only command allow-list.
 - **Multi-cluster:** `config/clusters.yaml` maps each RHOSP cluster to its Prometheus and director.
 - **Deploy target:** Red Hat OpenShift (UBI9 image, Helm chart).

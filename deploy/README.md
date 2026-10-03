@@ -27,6 +27,8 @@ Nothing environment-specific is baked into the code or the image. Everything com
 
 ## 1. Get an image
 
+> **Agent naming:** Each agent is named after a One Piece character whose role mirrors their function.
+
 **Build inside OpenShift** (no local container tooling needed). With Helm, set
 `build.enabled=true`. With Kustomize, the `lab` overlay already includes `components/build`:
 

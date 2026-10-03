@@ -32,14 +32,14 @@ logger = logging.getLogger(__name__)
 # The driver is not running commands anywhere; it only writes what a successful run would have
 # written, and every command text is allow-listed so the screen never shows an impossible action.
 _SCRIPT: tuple[tuple[str, dict], ...] = (
-    ("agent.started_plan", {
+    ("agent.started_nami", {
         "type": "agent.started", "status": "running", "agent": "planner", "step": "plan",
-        "title": "Planner engaged — analysing 3 alarm signatures",
+        "title": "Nami engaged — analysing 3 alarm signatures",
         "detail": "Reading runbook hints for hugepages / High Hugepage Usage / NodeFilesystemSpace.",
     }),
     ("plan.completed", {
         "type": "plan.completed", "status": "ok", "agent": "planner", "step": "plan",
-        "title": "Investigation plan composed",
+        "title": "Nami composed the plan,
         "detail": "2 hypotheses ranked, 3 metric checks queued.",
         "data": {"plan": {
             "hypotheses": [
@@ -53,9 +53,9 @@ _SCRIPT: tuple[tuple[str, dict], ...] = (
             ],
         }},
     }),
-    ("agent.started_promql", {
+    ("agent.started_usopp", {
         "type": "agent.started", "status": "running", "agent": "promql", "step": "promql",
-        "title": "PromQL agent synthesising queries",
+        "title": "Usopp synthesising queries,
         "detail": "Grounding in the collectd_* namespace; adapting worked examples from the query library.",
     }),
     ("query.rejected", {
@@ -97,7 +97,7 @@ _SCRIPT: tuple[tuple[str, dict], ...] = (
     }),
     ("reflection.approved_promql", {
         "type": "reflection.approved", "status": "ok", "agent": "reflection", "step": "reflect_promql",
-        "title": "PromQL evidence accepted",
+        "title": "Chopper accepted PromQL evidence,
         "detail": "The queries confirm the hugepage pool is exhausted and nova_compute is failing its health check.",
     }),
     ("decision.made", {
@@ -107,10 +107,10 @@ _SCRIPT: tuple[tuple[str, dict], ...] = (
         "data": {"decision": "need_node_access", "target_nodes": ["compute-0"],
                  "reason": "health_status=0 confirms the service is down, not why"},
     }),
-    ("agent.started_node", {
+    ("agent.started_sanji", {
         "type": "agent.started", "status": "running", "agent": "node_agent", "step": "node",
         "node": "compute-0",
-        "title": "Node agent connecting via director hop",
+        "title": "Sanji connecting via director hop,
         "detail": "Inventory resolved via metalsmith — compute-0 → ctlplane 192.168.24.10.",
     }),
     ("cmd.refused", {
@@ -169,17 +169,17 @@ _SCRIPT: tuple[tuple[str, dict], ...] = (
     }),
     ("reflection.approved_node", {
         "type": "reflection.approved", "status": "ok", "agent": "reflection", "step": "reflect_node",
-        "title": "Node evidence accepted",
+        "title": "Chopper accepted node evidence,
         "detail": "Commands converge on a memory/hugepage exhaustion picture; enough evidence to write the RCA.",
     }),
-    ("agent.started_report", {
+    ("agent.started_robin", {
         "type": "agent.started", "status": "running", "agent": "report", "step": "report",
-        "title": "Report agent drafting the RCA",
+        "title": "Robin drafting the RCA,
         "detail": "Synthesising 7 pieces of evidence into the root-cause section.",
     }),
     ("report.ready", {
         "type": "report.ready", "status": "ok", "agent": "report", "step": "report",
-        "title": "RCA ready",
+        "title": "Robin ready",
         "detail": "A guest exhausted the 1G hugepage pool on compute-0, starving nova_compute of backing pages.",
         "data": {
             "root_cause": ("A guest on compute-0 consumed the entire 1G hugepage pool "

@@ -1,4 +1,4 @@
-# Read-only commands the Node Agent may run.
+# Read-only commands Sanji (Node Agent) may run.
 #
 # The LLM never hands a string to a shell. It proposes a command, this allow-list validates it,
 # and only then is it composed into the director hop. A command that does not fully match one of

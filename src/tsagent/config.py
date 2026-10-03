@@ -205,12 +205,12 @@ class CorrelationConfig(BaseModel):
 
 class ReflectionConfig(BaseModel):
     enabled: bool = True
-    max_retries: int = 2
+    max_retries: int = 1
 
 
 class InvestigationConfig(BaseModel):
-    max_promql_queries: int = 6
-    max_node_commands: int = 8
+    max_promql_queries: int = 3
+    max_node_commands: int = 4
     node_access_threshold: float = 0.7
 
 
@@ -221,10 +221,10 @@ class ReportConfig(BaseModel):
     notify_token_env: str = ""
     # Budget for the RCA prompt. The defaults fit an 8B model with a 4096-token context; raise
     # them when the report agent runs on a larger-context model.
-    max_tokens: int = 900
-    evidence_items: int = 6
-    evidence_max_chars: int = 1500
-    evidence_result_chars: int = 250
+    max_tokens: int = 400
+    evidence_items: int = 3
+    evidence_max_chars: int = 600
+    evidence_result_chars: int = 120
 
 
 class SSHConfig(BaseModel):
@@ -237,7 +237,7 @@ class SSHConfig(BaseModel):
     # disables host-key verification, which is logged as a warning at every connection.
     known_hosts: str = ""
     # Command output is trimmed to this many characters before it reaches a prompt.
-    output_max_chars: int = 1500
+    output_max_chars: int = 600
 
 
 class EventsConfig(BaseModel):

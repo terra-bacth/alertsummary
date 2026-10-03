@@ -49,12 +49,12 @@
 | Agent | Role | Tools it uses |
 |---|---|---|
 | **Correlation Engine** (deterministic + LLM assist) | Buffer alarms for a window (default 5 min); group by node/site/labels; dedupe; promote group → *Incident* | Rules first; LLM only for ambiguous grouping |
-| **Planner Agent** | Reads the incident, produces an investigation plan (which metrics to check, hypotheses) | LLM + alarm-runbook knowledge base |
-| **PromQL Agent** | Generates PromQL from plan, executes against Prometheus, interprets results | `prometheus_query` tool (range + instant) |
-| **Decision Node** | Deterministic + LLM: based on metric evidence, decide "sufficient → report" vs "need node access" | Graph conditional edge |
-| **Node Agent** | SSH into node; run whitelisted read-only commands (journalctl, systemctl status, df, top, dmesg, tail of service logs); summarize findings | `ssh_exec` tool with command allow-list |
-| **Reflection Agent** (cross-cutting) | After each agent step: critique output (is PromQL valid? does evidence support conclusion? did we miss an alarm?), request retry with feedback (max 2 retries/step) | LLM (can be cheaper model) |
-| **Report Agent** | Final RCA report: timeline, correlated alarms, evidence (queries + results + log excerpts), root-cause hypothesis, recommended corrective steps, confidence score | Jinja2 template → Markdown/JSON |
+| **Nami (Planner)** | Reads the incident, produces an investigation plan (which metrics to check, hypotheses) | LLM + alarm-runbook knowledge base |
+| **Usopp (PromQL)** | Generates PromQL from plan, executes against Prometheus, interprets results | `prometheus_query` tool (range + instant) |
+| **Zoro (Decision)** | Deterministic + LLM: based on metric evidence, decide "sufficient → report" vs "need node access" | Graph conditional edge |
+| **Sanji (Node Agent)** | SSH into node; run whitelisted read-only commands (journalctl, systemctl status, df, top, dmesg, tail of service logs); summarize findings | `ssh_exec` tool with command allow-list |
+| **Chopper (Reflection)** (cross-cutting) | After each agent step: critique output (is PromQL valid? does evidence support conclusion? did we miss an alarm?), request retry with feedback (max 2 retries/step) | LLM (can be cheaper model) |
+| **Robin (Report)** | Final RCA report: timeline, correlated alarms, evidence (queries + results + log excerpts), root-cause hypothesis, recommended corrective steps, confidence score | Jinja2 template → Markdown/JSON |
 
 ### 1.3 Orchestration model (LangGraph)
 

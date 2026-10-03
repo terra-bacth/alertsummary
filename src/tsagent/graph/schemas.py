@@ -17,8 +17,8 @@ class MetricCheck(BaseModel):
 
 
 class InvestigationPlan(BaseModel):
-    hypotheses: list[str] = Field(default_factory=list)
-    checks: list[MetricCheck] = Field(default_factory=list)
+    hypotheses: list[str] = Field(default_factory=list, max_length=2)
+    checks: list[MetricCheck] = Field(default_factory=list, max_length=3)
 
 
 class GeneratedQuery(BaseModel):
@@ -33,25 +33,25 @@ class QueryBatch(BaseModel):
 
 class Reflection(BaseModel):
     verdict: Literal["OK", "RETRY"]
-    feedback: str = ""
+    feedback: str = Field(default="", max_length=150)
 
 
 class Decision(BaseModel):
     decision: Literal["sufficient", "need_node_access"]
-    reason: str = ""
+    reason: str = Field(default="", max_length=150)
     target_nodes: list[str] = Field(default_factory=list)
 
 
 class NodeCommand(BaseModel):
     node: str = ""
     command: str = ""
-    rationale: str = ""
+    rationale: str = Field(default="", max_length=100)
     done: bool = Field(default=False, description="True when no further command is needed")
 
 
 class RCA(BaseModel):
-    root_cause: str
+    root_cause: str = Field(default="", max_length=200)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    recommendations: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
-    timeline: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list, max_length=3)
+    caveats: list[str] = Field(default_factory=list, max_length=2)
+    timeline: list[str] = Field(default_factory=list, max_length=3)
